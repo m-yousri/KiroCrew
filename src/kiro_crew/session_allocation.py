@@ -938,6 +938,9 @@ class SessionAllocationService:
     def mapped_sid(self, key: str) -> str:
         return self._owner._session_map.mapped_sid(self._owner._fold_key(key))
 
+    def mapped_session_keys(self) -> frozenset[str]:
+        return frozenset(self._owner._session_map.mapped_sids_by_key())
+
     def seed_conversation(
         self,
         key: str,

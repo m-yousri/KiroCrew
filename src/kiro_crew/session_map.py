@@ -64,6 +64,17 @@ def _kiro_sessions_dir() -> Path:
 # every conversation that had already turned it off.
 MIRROR_OPT_OUT_FLAG = "mirror_opt_out"
 
+#: Set on a conversation whose owning app was uninstalled: its next cold start must
+#: start EMPTY. Clearing the sid alone stops the native resume and not the replay —
+#: the transcript stays on disk by design, so ``build_session_replay`` would inject
+#: the removed app's history into the first turn of the next installation under the
+#: same slot key, which is the bug the pointer drop exists to prevent. Persisted
+#: rather than in-memory because the two writers are different processes (the
+#: gateway-less CLI has no live manager) and because a gateway restart between the
+#: uninstall and the reinstall must not lose it. One-shot: consumed, and cleared as
+#: it is consumed, by the first cold start that honours it.
+SUPPRESS_REPLAY_FLAG = "suppress_replay"
+
 # Highest explicit DM generation acknowledged before its first provider turn.
 # Stored on the stable bucket entry so repeated /new commands cost one integer,
 # not one immortal map row per empty generation.
@@ -75,7 +86,15 @@ GENERATION_FLOOR_FIELD = "generation_floor"
 # the map carries forever, and every mutation rewrites the whole map. A flag
 # describing one session (Slack's ``temporary`` / ``incognito`` threads) must
 # stay collectable — one leaked row per such thread would grow without bound.
-_DURABLE_FLAGS = frozenset({MIRROR_OPT_OUT_FLAG})
+# ``SUPPRESS_REPLAY_FLAG`` is durable for the reason the paragraph above gives, not
+# as an exception to it: it is a decision about the key's NEXT cold start, written at
+# a moment when there is no session at all, and ``prune`` deletes a sid-less entry
+# that nothing holds back. Losing it there would lose it in precisely the case it
+# exists for — clear the pointer, restart the gateway, reinstall — so the flag would
+# be decorative. The "grows without bound" cost the paragraph warns about does not
+# apply: unlike a Slack ``temporary`` flag, this one is ONE-SHOT, so the row it keeps
+# alive is collectable again as soon as the first cold start consumes it.
+_DURABLE_FLAGS = frozenset({MIRROR_OPT_OUT_FLAG, SUPPRESS_REPLAY_FLAG})
 
 # How long a deferred flush waits before serializing, so a burst of mutations
 # (a subagent wave calling ``set`` once per spawn) collapses into one write
@@ -1101,7 +1120,7 @@ class SessionMap:
         return entry.get("provider", "")
 
     @_guarded
-    def clear_sid(self, key: str) -> None:
+    def clear_sid(self, key: str) -> bool:
         """Clear the stored session ID without removing the entry.
 
         Used on provider switch (the SID is incompatible with the new
@@ -1109,10 +1128,18 @@ class SessionMap:
         is stashed as ``discarded_sid`` so the operation is diagnosable and
         manually reversible — the native conversation still exists on disk;
         only the pointer to it is dropped.
+
+        Returns whether a pointer was actually dropped, so a caller clearing a
+        SET of keys can report how many conversations it orphaned without a
+        second lookup. ``get`` is the wrong probe for that: it gates on the
+        transcript file existing and prunes stale entries as a side effect, so
+        it answers "is this resumable" rather than "is a pointer recorded".
         """
         entry = self._data.get(canonical_key(key))
         if entry and _stash_and_clear_sid(entry):
             self._save()
+            return True
+        return False
 
     def get_discarded_sid(self, key: str) -> str:
         """Return the last sid dropped from *key* by any path, or ''.

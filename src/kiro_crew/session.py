@@ -197,6 +197,7 @@ from kiro_crew.session_lifecycle import (
 from kiro_crew.session_map import _kiro_sessions_dir  # noqa: F401
 from kiro_crew.session_map import (
     MIRROR_OPT_OUT_FLAG,
+    SUPPRESS_REPLAY_FLAG,
     BindListener,
 )
 from kiro_crew.session_map import SessionMap as SessionMap  # noqa: F401
@@ -2435,11 +2436,22 @@ class SessionManager:
         which nobody asked for.
         """
         folded = self._fold_key(key)
+        # BOTH markers are consumed, and the persisted one unconditionally — never as
+        # the `elif` tail of the in-memory branch. A gateway uninstall sets both (an
+        # in-memory one via `discard_conversation(replay=False)` and a durable one via
+        # `suppress_replay_persistently`), so a chain that stops at the first hit
+        # leaves the disk flag standing and a LATER cold start of the NEW installation
+        # starts empty for no reason — turning a fix for stale history into silent
+        # amnesia about live history.
+        persisted = self._consume_persisted_replay_suppression(key, folded)
+        in_memory = False
         if key in self._suppress_replay:
             self._suppress_replay.discard(key)
+            in_memory = True
         elif folded in self._suppress_replay:
             self._suppress_replay.discard(folded)
-        else:
+            in_memory = True
+        if not (in_memory or persisted):
             return False
         # The session that consumed the suppression starts with no history, so
         # its first confirmed reading is this key's floor. Marked here, on the
@@ -2449,6 +2461,37 @@ class SessionManager:
         if session is not None:
             session.floor_pending = True
         return True
+
+    def _consume_persisted_replay_suppression(self, key: str, folded: str) -> bool:
+        """Read *and clear* the on-disk half of the suppression, for either alias.
+
+        The in-memory set cannot be the whole answer. Its two writers are different
+        processes — ``kirocrew app uninstall`` has no live manager at all — and it
+        does not survive a gateway restart, so a reinstall after either would replay
+        the removed app's transcript with nothing left to stop it. Cleared as it is
+        read, matching the in-memory branch: the FIRST cold start after the uninstall
+        starts empty, and a later idle-timeout expiry on that key does not.
+        """
+        found = False
+        for candidate in (folded, key) if folded != key else (key,):
+            if self._session_map.get_flag(candidate, SUPPRESS_REPLAY_FLAG):
+                self._session_map.set_flag(candidate, SUPPRESS_REPLAY_FLAG, False)
+                found = True
+        # `set_flag` schedules the debounced flush rather than forcing one. A crash
+        # inside that window leaves the flag set, and the next cold start on this key
+        # then starts empty a second time — recoverable, and the transcript is intact
+        # on disk. Forcing a synchronous write here would put a disk write on the
+        # event loop on every cold start after an uninstall, which is the larger cost.
+        return found
+
+    def suppress_replay_persistently(self, key: str) -> None:
+        """Mark *key*'s next cold start to start empty, durably.
+
+        Written through THIS manager's map rather than a throwaway one, for the
+        reason ``SessionMap``'s rule 3 gives: a detached write is reversed by the
+        live map's next mutation and takes its unflushed rows with it.
+        """
+        self._session_map.set_flag(self._fold_key(key), SUPPRESS_REPLAY_FLAG, True)
 
     def set_child_teardown_handler(self, handler: Any) -> None:
         """Register the hook that ends a parent's sub-agent runs at parent end.
@@ -2741,6 +2784,18 @@ class SessionManager:
         answer a resumable session, and this one deliberately omits it.
         """
         return self._allocation_boundary().mapped_sid(key)
+
+    def mapped_session_keys(self) -> frozenset[str]:
+        """Every folded key this gateway holds a session ID for, in memory.
+
+        The in-memory answer, which is the only correct one for a caller that
+        goes on to WRITE through this manager: a detached ``SessionMap`` reads
+        the file, and the file lags this map by whatever it has not flushed, so
+        an enumeration taken there can omit a key whose pointer already exists.
+        Pair it with :meth:`session_keys` to cover a key whose allocation is
+        still in flight and has not reached the map yet.
+        """
+        return self._allocation_boundary().mapped_session_keys()
 
     def seed_conversation(self, key: str, sid: str, *, provider: str = "", cwd: str = "") -> None:
         """Seed a persisted conversation mapping."""

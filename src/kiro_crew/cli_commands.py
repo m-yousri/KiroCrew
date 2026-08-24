@@ -31,8 +31,10 @@ from zoneinfo import ZoneInfo
 from kiro_crew import __version__, app_lifecycle_client, beacon, platform_compat
 from kiro_crew.agent import reset_agent_model
 from kiro_crew.apps.bridges import (
+    SessionPointerCleanup,
     deregister_app,
     deregister_app_crons_from_service,
+    discard_app_session_pointers,
     register_app,
     register_app_crons_with_service,
 )
@@ -1009,6 +1011,47 @@ def _handle_app_import(args: argparse.Namespace) -> None:
     print(f"\n   Run: kirocrew app enable {result.name}")
 
 
+def _app_already_gone(result: object) -> bool:
+    """Whether an uninstall failed only because the app is not installed.
+
+    Matched on the message `uninstall_app` produces for that case rather than on a
+    code, because `AppResult` carries no code; kept narrow on purpose — every other
+    failure leaves the app whole, and clearing the pointers its slots are still
+    entitled to resume would be the bug this whole path exists to prevent.
+    """
+    return "is not installed" in str(getattr(result, "error", "") or "")
+
+
+def _print_pointer_cleanup(name: str, cleanup: SessionPointerCleanup) -> None:
+    """Say what happened to the app's resume pointers, including nothing.
+
+    A clear that did not happen cannot stay quiet, whether it declined or failed.
+    Either way it leaves a pointer keyed by a name a reinstall reuses, so the next
+    installation's first turn resumes the removed app's transcript — and the
+    operator who would have to notice that is standing right here, at a command
+    that otherwise printed a success tick. The two get different text because they
+    need different actions: stop the gateway, versus fix the storage error.
+    """
+    if cleanup.dropped:
+        print(f"   dropped {cleanup.dropped} conversation pointer(s) — a reinstall starts fresh")
+    elif cleanup.declined:
+        print(
+            f"   ⚠️  left {name}'s conversation pointers in place: a running gateway owns "
+            f"session_map.json, and a second writer would drop rows it has not flushed. "
+            f"Reinstalling under this name may resume the removed app's transcript. "
+            f"Stop the gateway and run `kirocrew app uninstall {name}` again to clear them.",
+            file=sys.stderr,
+        )
+    elif cleanup.failed:
+        print(
+            f"   ⚠️  could not clear {name}'s conversation pointers: the session map "
+            f"could not be read or written (see the log for the error). Reinstalling "
+            f"under this name may resume the removed app's transcript. Fix the cause "
+            f"and run `kirocrew app uninstall {name}` again to clear them.",
+            file=sys.stderr,
+        )
+
+
 def _handle_app(args: argparse.Namespace) -> None:
     """Dispatch app subcommands: install, list, enable, disable, uninstall, info."""
     action = getattr(args, "app_action", None)
@@ -1120,8 +1163,23 @@ def _handle_app(args: argparse.Namespace) -> None:
         keep_data = not getattr(args, "purge_data", False)
         result = uninstall_app(args.name, keep_data=keep_data)
         if result.ok:
+            # AFTER success, matching this function's trust-grant reasoning: a
+            # failed uninstall leaves nothing changed, so a still-installed app
+            # keeps the pointers its slots are still entitled to resume.
+            cleanup = discard_app_session_pointers(args.name)
             print(f"✅ {result.message}")
+            _print_pointer_cleanup(args.name, cleanup)
         else:
+            # The pointers outlive the app, so "already gone" is the one failure
+            # whose bookkeeping half is still worth doing. It is also the residual's
+            # only self-correction: the clear runs under `GatewayLock` and declines
+            # while a gateway owns `session_map.json`, so an uninstall done with the
+            # gateway up leaves pointers behind — and re-running this command with
+            # the gateway stopped is what clears them. That recovery only exists if
+            # the clear does not require the app to still be installed, which is why
+            # it runs here rather than only on the success path.
+            if _app_already_gone(result):
+                _print_pointer_cleanup(args.name, discard_app_session_pointers(args.name))
             print(f"❌ {result.error}", file=sys.stderr)
             sys.exit(1)
 

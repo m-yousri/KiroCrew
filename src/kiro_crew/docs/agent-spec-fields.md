@@ -374,7 +374,13 @@ withhold is recorded as a `mcp_auto_approve_withheld` security event.
 On the KAS wire, `env` and `headers` are withheld from every entry — `env`
 routinely holds tokens, and a remote entry's `headers` can hold a static
 `Authorization`. One exception: `KIROCREW_HOME` survives for Crew's own managed
-servers, because it pins the data home.
+servers, because it pins the data home. That recorded pin is also **write
+provenance**: the shared-home write guard reads it back from every managed
+entry to decide whether the shared `~/.kiro/agents` specs belong to this
+instance — specs pinned by a different home (or by nobody, or with disagreeing
+pins) refuse the rewrite, and the ceiling gate judges a kept foreign spec's
+pre-authorized grants against this instance's governance ceiling at session
+start.
 
 ### Model
 

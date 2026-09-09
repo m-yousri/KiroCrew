@@ -907,11 +907,19 @@ unconditional rebuild would rewrite a file kiro-cli watches every refresh interv
 Two details make that bound safe rather than merely cheap. The baseline is seeded by
 `prime_ceiling_projection` **before the poller starts**, because the first poll can itself
 install a new ceiling and a first-call baseline would record that generation and skip the very
-rebuild it needed. And the memo advances **only after a successful rebuild**: a failure raises
-through the hook runner, which logs and moves on, so marking the generation synchronised would
-lose the retry the next poll gives and leave forbidden auto-approvals on disk for the process
-lifetime. An unseeded baseline rebuilds once rather than skipping — a redundant rewrite costs a
-file write, a skipped one costs the tighten.
+rebuild it needed. And the memo advances **only after a confirmed write**: the hook calls
+`rebuild_agent_config_reporting()`, which returns `(path, wrote)` from the same single
+evaluation that gates the write. A failure still raises through the hook runner, which logs
+and moves on — and a **refused** rebuild (an instance the shared-home write guard declines:
+non-default `KIROCREW_HOME`, pod, or foreign-pinned specs) returns `wrote=False` and holds the
+memo the same way, logging the pending projection at WARNING once per generation. Either way,
+marking the generation synchronised would lose the retry the next poll gives and leave
+forbidden auto-approvals on disk for the process lifetime; holding the memo means every later
+poll retries and the projection lands the moment the failure or refusal clears. The verdict
+comes from inside the rebuild itself, never a separate guard probe, which would race a
+concurrent default-home rewrite and record a projection that never landed. An unseeded
+baseline rebuilds once rather than skipping — a redundant rewrite costs a file write, a
+skipped one costs the tighten.
 
 What no hook can do is narrow a session **already negotiated**: kiro-cli holds the grants it
 was given, and nothing reaches into a running one. That limit has the same shape as an

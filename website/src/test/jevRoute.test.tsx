@@ -14,6 +14,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render, screen, cleanup } from '@testing-library/react'
 import { describe, it, expect, afterEach } from 'vitest'
 
@@ -149,10 +150,17 @@ describe('jevRouteShownModel', () => {
 describe('the picker row', () => {
   afterEach(cleanup)
 
+  // ModelDropdownList reads the saved model order through react-query, so the
+  // real app's root provider is part of its render contract.
+  const renderWithQuery = (ui: React.ReactElement) => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    return render(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>)
+  }
+
   it('shows a label, never the wire id', () => {
     // The id exists so the gateway can recognise the choice; showing it would put
     // an internal spelling where a user expects a name.
-    render(
+    renderWithQuery(
       <ModelDropdownList
         models={withJevRoute(LIST, true, LABEL)}
         activeModel={JEV_ROUTE_MODEL}
@@ -164,13 +172,13 @@ describe('the picker row', () => {
   })
 
   it('keeps every real model id verbatim, because that is what users match on', () => {
-    render(<ModelDropdownList models={LIST} activeModel="auto" onSelect={() => {}} />)
+    renderWithQuery(<ModelDropdownList models={LIST} activeModel="auto" onSelect={() => {}} />)
     expect(screen.getByText('claude-opus-5')).toBeInTheDocument()
     expect(screen.getByText('auto')).toBeInTheDocument()
   })
 
   it('carries the id as an attribute, so a selector is not locale-dependent', () => {
-    const { container } = render(
+    const { container } = renderWithQuery(
       <ModelDropdownList
         models={withJevRoute(LIST, true, LABEL)}
         activeModel={JEV_ROUTE_MODEL}

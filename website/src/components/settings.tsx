@@ -211,9 +211,13 @@ interface SettingsMultiSelectProps {
   disabled?: boolean
   configKey?: string
   settingId?: string
+  onReorder?: (orderedValues: string[]) => void
+  reorderDisabled?: boolean
+  reorderRowLabel?: (value: string) => string
+  footerAction?: { label: string; onSelect: () => void; disabled?: boolean }
 }
 
-export function SettingsMultiSelect({ label, description, hint, options, selected, onToggle, bulkActions, summary, searchPlaceholder, disabled, configKey, settingId }: SettingsMultiSelectProps) {
+export function SettingsMultiSelect({ label, description, hint, options, selected, onToggle, bulkActions, summary, searchPlaceholder, disabled, configKey, settingId, onReorder, reorderDisabled, reorderRowLabel, footerAction }: SettingsMultiSelectProps) {
   const controlId = React.useId()
   return (
     <SettingsField label={label} description={description} hint={hint} configKey={configKey} settingId={settingId} controlId={controlId}>
@@ -227,6 +231,10 @@ export function SettingsMultiSelect({ label, description, hint, options, selecte
         summary={summary}
         searchPlaceholder={searchPlaceholder}
         disabled={disabled}
+        onReorder={onReorder}
+        reorderDisabled={reorderDisabled}
+        reorderRowLabel={reorderRowLabel}
+        footerAction={footerAction}
       />
     </SettingsField>
   )

@@ -22,7 +22,11 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from kiro_crew import platform_compat
-from kiro_crew.agent_sdk.backends import agent_process_markers, node_adapter_entry_relpaths
+from kiro_crew.agent_sdk.backends import (
+    agent_process_markers,
+    custom_harness_identity,
+    node_adapter_entry_relpaths,
+)
 from kiro_crew.atomic_write import atomic_write
 from kiro_crew.config.paths import config_dir
 from kiro_crew.constants import (
@@ -512,7 +516,32 @@ def _cmdline_names_a_harness(cmdline: bytes) -> bool:
             return True
         if _token_is_node_adapter_entry(token):
             return True
-    return False
+    return _cmdline_is_the_custom_harness(cmdline)
+
+
+def _cmdline_is_the_custom_harness(cmdline: bytes) -> bool:
+    """True when *cmdline* is the command line Crew spawns the registered custom harness as.
+
+    The one harness whose name is configuration: ``backends.custom_harness_identity``
+    answers ``(command basename, first argument)`` while a spec is registered and
+    ``None`` otherwise, read LIVE because the spec is written by config load, after
+    this module's static sets were built. The match is positional and exact --
+    ``argv[0]``'s basename, then ``argv[1]`` when the operator gave arguments -- for
+    the reason the docstring there gives: a command's basename can be an interpreter,
+    and pinning the script slot is what keeps an unrelated ``python3`` from answering
+    for the harness. Windows image names are handled beside the static set in
+    :func:`_is_managed_agent_process`.
+    """
+    identity = custom_harness_identity()
+    if identity is None:
+        return False
+    command_basename, first_argument = identity
+    tokens = _argv_tokens(cmdline)
+    if not tokens or _basename_of(tokens[0]) != command_basename.encode("utf-8", "replace"):
+        return False
+    if first_argument is None:
+        return True
+    return len(tokens) > 1 and tokens[1] == first_argument.encode("utf-8", "replace")
 
 
 def _is_managed_agent_process(pid: int) -> bool:
@@ -553,7 +582,18 @@ def _is_managed_agent_process(pid: int) -> bool:
         candidates = {stem}
         if stem.endswith(".exe"):
             candidates.add(stem[: -len(".exe")])
-        return any(name.decode().lower() in candidates for name in _MANAGED_AGENT_BASENAMES)
+        if any(name.decode().lower() in candidates for name in _MANAGED_AGENT_BASENAMES):
+            return True
+        # The operator-named harness, by its command's basename. An image name is all
+        # Windows offers cheaply, so the script slot cannot be checked here -- the same
+        # residual the Node adapters carry on this platform (their image is node.exe).
+        identity = custom_harness_identity()
+        if identity is None:
+            return False
+        custom_stem = identity[0].lower()
+        return custom_stem in candidates or (
+            custom_stem.endswith(".exe") and custom_stem[: -len(".exe")] in candidates
+        )
     return platform_compat.process_matches(pid, _MANAGED_AGENT_MARKERS)
 
 

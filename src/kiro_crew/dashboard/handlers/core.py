@@ -2160,7 +2160,35 @@ async def api_kirocrew_config(request: web.Request) -> web.Response:
         return web.json_response({"ok": True, "restart_required": restart_required})
 
     cfg = KiroCrewConfig.load()
-    return web.json_response(_masked_config_dict(cfg))
+    return web.json_response(_config_view_for(request, cfg))
+
+
+def _config_view_for(request: web.Request, cfg: KiroCrewConfig) -> dict:
+    """The masked config dict, with the owner-only fields hidden from a non-owner.
+
+    ``_masked_config_dict`` masks by SCHEMA sensitivity, the same for every reader.
+    ``agent.custom_acp.args`` is not a secret field by schema -- it is the operator's
+    command line, shown back to them in the form they typed it in -- but its
+    contents are the operator's own, and its help text can only WARN them to keep
+    secrets out. An allow-listed non-owner reading the config would otherwise get a
+    token typed there verbatim. The write is already owner-only
+    (``require_owner_dashboard_request`` on the PATCH), so the read follows: each
+    argument is replaced by the sensitive mask for a non-owner, which keeps the
+    count (the row still says how the harness is configured) and hides the text.
+    The owner sees the values, so the mask never round-trips through a save.
+    An app with no ``state`` has no owner identity to judge against, so the
+    reader is treated as a non-owner and the arguments are masked (fail closed).
+    """
+    from kiro_crew.dashboard.handlers.source_providers import is_owner_dashboard_request
+
+    view = _masked_config_dict(cfg)
+    if "state" in request.app and is_owner_dashboard_request(request):
+        return view
+    agent = view.get("agent")
+    custom = agent.get("custom_acp") if isinstance(agent, dict) else None
+    if isinstance(custom, dict) and isinstance(custom.get("args"), list):
+        custom["args"] = [_SENSITIVE_MASK for _ in custom["args"]]
+    return view
 
 
 # Allowed editable config paths and their validators
@@ -2290,6 +2318,24 @@ _EDITABLE_CONFIG: dict[str, dict] = {
     # against the one code owner, so this cannot drift from what ``AcpProvider``
     # will actually serve.
     "agent.acp_backend": {"type": "enum", "values_fn": _selectable_acp_backends},
+    # The operator-named ACP harness, written as ONE record: a command with no gate,
+    # or a gate with no command, is not a half-configured harness but an unusable
+    # one, and the leaf refuses to register it either way. Validated here for
+    # shape only (strings, a list of strings, bounded lengths); whether the four
+    # values describe a harness Crew can run is decided by ``register_custom_backend``
+    # on the config load that follows the write, which is what makes ``custom``
+    # appear in ``_selectable_acp_backends`` above -- or not, with the reason logged.
+    # OWNER-ONLY in the handler: this field names a program the gateway will
+    # execute, and a dashboard token alone does not imply ownership.
+    "agent.custom_acp": {
+        "type": "dict",
+        "keys": {
+            "command": {"type": "str", "max_len": 1024},
+            "args": {"type": "str_list", "max_items": 64, "max_len": 1024},
+            "gate_option": {"type": "str", "max_len": 128},
+            "gate_value": {"type": "str", "max_len": 256},
+        },
+    },
     # Default model for new sessions. Membership can NOT be validated against a
     # fixed list: the real vocabulary is whatever the live kiro-cli advertises
     # (/api/models spawns it to find out), and it spans both canonical registry
@@ -2674,6 +2720,23 @@ async def api_kirocrew_config_patch(request: web.Request) -> web.Response:
 
     path_key = body.get("path", "")
     value = body.get("value")
+
+    def _resources(current: object) -> str:
+        # What the SEL records as the write's resource. Every field but one is a
+        # preference whose value IS the audit-worthy fact. ``agent.custom_acp`` is
+        # operator-typed program input, and its ``args`` can carry whatever the
+        # operator's harness takes on its command line -- a token included. The SEL
+        # is readable back through ``/api/sel/events``, so that record is audited
+        # by path and shape only, never by value, on every outcome (denied, error,
+        # success alike: a rejected write is still a write that was attempted).
+        if path_key == "agent.custom_acp":
+            if isinstance(current, dict):
+                args = current.get("args")
+                count = len(args) if isinstance(args, list) else 0
+                return f"{path_key}=<record: command, {count} arg(s), gate option>"
+            return f"{path_key}=<record>"
+        return f"{path_key}={current}"
+
     spec = _EDITABLE_CONFIG.get(path_key)
     if not spec:
         # `agent.apps_allow_third_party` was deliberately REMOVED from the editable
@@ -2685,8 +2748,8 @@ async def api_kirocrew_config_patch(request: web.Request) -> web.Response:
         # endpoint owns that sequencing, so point the caller at it instead of
         # silently accepting a write that cannot honour the setting's meaning.
         if path_key in _MOVED_CONFIG_FIELDS:
-            return _deny(_MOVED_CONFIG_FIELDS[path_key], f"{path_key}={value}")
-        return _deny(f"field not editable: {path_key}", f"{path_key}={value}")
+            return _deny(_MOVED_CONFIG_FIELDS[path_key], _resources(value))
+        return _deny(f"field not editable: {path_key}", _resources(value))
 
     # Validate value
     if spec["type"] == "enum":
@@ -2696,42 +2759,42 @@ async def api_kirocrew_config_patch(request: web.Request) -> web.Response:
         # read before that happened.
         allowed = list(spec["values_fn"]()) if "values_fn" in spec else spec["values"]
         if value not in allowed:
-            return _deny(f"invalid value, must be one of {allowed}", f"{path_key}={value}")
+            return _deny(f"invalid value, must be one of {allowed}", _resources(value))
     elif spec["type"] == "int":
         try:
             value = int(value)
         except (TypeError, ValueError):
-            return _deny("must be an integer", f"{path_key}={value}")
+            return _deny("must be an integer", _resources(value))
         lo, hi = spec.get("min", 0), spec.get("max", 999999)
         if value < lo or value > hi:
-            return _deny(f"must be between {lo} and {hi}", f"{path_key}={value}")
+            return _deny(f"must be between {lo} and {hi}", _resources(value))
     elif spec["type"] == "bool":
         if not isinstance(value, bool):
-            return _deny("must be a boolean", f"{path_key}={value}")
+            return _deny("must be a boolean", _resources(value))
     elif spec["type"] == "float":
         try:
             value = float(value)
         except (TypeError, ValueError):
-            return _deny("must be a number", f"{path_key}={value}")
+            return _deny("must be a number", _resources(value))
         if not math.isfinite(value):
-            return _deny("must be a finite number", f"{path_key}={value}")
+            return _deny("must be a finite number", _resources(value))
         lo, hi = spec.get("min", 0.0), spec.get("max", 999999.0)
         if value < lo or value > hi:
-            return _deny(f"must be between {lo} and {hi}", f"{path_key}={value}")
+            return _deny(f"must be between {lo} and {hi}", _resources(value))
     elif spec["type"] == "str":
         if not isinstance(value, str):
-            return _deny("must be a string", f"{path_key}={value}")
+            return _deny("must be a string", _resources(value))
         max_len = spec.get("max_len", 256)
         if len(value) > max_len:
-            return _deny(f"must be at most {max_len} characters", f"{path_key}={value}")
+            return _deny(f"must be at most {max_len} characters", _resources(value))
         if "values" in spec and value not in spec["values"]:
-            return _deny(f"invalid value, must be one of {spec['values']}", f"{path_key}={value}")
+            return _deny(f"invalid value, must be one of {spec['values']}", _resources(value))
         pattern = spec.get("pattern")
         if pattern and not re.fullmatch(pattern, value):
-            return _deny(f"invalid value for {path_key}", f"{path_key}={value}")
+            return _deny(f"invalid value for {path_key}", _resources(value))
         values_fn = spec.get("values_fn")
         if values_fn and value not in values_fn():
-            return _deny(f"invalid value for {path_key}", f"{path_key}={value}")
+            return _deny(f"invalid value for {path_key}", _resources(value))
         validate_fn = spec.get("validate_fn")
         if validate_fn:
             # Resolved OFF the loop and handed down. Every validator here rejects a
@@ -2744,7 +2807,7 @@ async def api_kirocrew_config_patch(request: web.Request) -> web.Response:
             provider = await asyncio.to_thread(_active_provider_name)
             reason = validate_fn(value, request, provider)
             if reason:
-                return _deny(reason, f"{path_key}={value}")
+                return _deny(reason, _resources(value))
     elif spec["type"] == "dict":
         # One-level record written ATOMICALLY as a single value, for settings
         # where multiple scalar fields form one verdict and a partial write is
@@ -2753,48 +2816,71 @@ async def api_kirocrew_config_patch(request: web.Request) -> web.Response:
         # each value validated against its scalar subspec — so this cannot
         # become a generic JSON passthrough.
         if not isinstance(value, dict):
-            return _deny("must be an object", f"{path_key}={value}")
+            return _deny("must be an object", _resources(value))
         keys_spec = spec["keys"]
         unknown = set(value) - set(keys_spec)
         if unknown:
-            return _deny(f"unknown key(s): {sorted(unknown)}", f"{path_key}={value}")
+            return _deny(f"unknown key(s): {sorted(unknown)}", _resources(value))
         missing = set(keys_spec) - set(value)
         if missing:
-            return _deny(f"missing key(s): {sorted(missing)}", f"{path_key}={value}")
+            return _deny(f"missing key(s): {sorted(missing)}", _resources(value))
         validated: dict = {}
         for sub_key, sub_spec in keys_spec.items():
             sub_val = value[sub_key]
             if sub_spec["type"] == "str":
                 if not isinstance(sub_val, str):
-                    return _deny(f"{sub_key} must be a string", f"{path_key}={value}")
+                    return _deny(f"{sub_key} must be a string", _resources(value))
                 if len(sub_val) > sub_spec.get("max_len", 256):
                     return _deny(
                         f"{sub_key} must be at most {sub_spec.get('max_len', 256)} characters",
-                        f"{path_key}={value}",
+                        _resources(value),
                     )
+            elif sub_spec["type"] == "str_list":
+                # A list of bounded strings, bounded in length itself. Kept as
+                # narrow as the scalar branches: no nesting, no non-string items,
+                # so this cannot become the JSON passthrough the docstring above
+                # rules out.
+                if not isinstance(sub_val, list):
+                    return _deny(f"{sub_key} must be a list of strings", _resources(value))
+                max_items = sub_spec.get("max_items", 64)
+                if len(sub_val) > max_items:
+                    return _deny(
+                        f"{sub_key} must have at most {max_items} entries",
+                        _resources(value),
+                    )
+                item_max = sub_spec.get("max_len", 256)
+                for item in sub_val:
+                    if not isinstance(item, str):
+                        return _deny(f"{sub_key} must be a list of strings", _resources(value))
+                    if len(item) > item_max:
+                        return _deny(
+                            f"each {sub_key} entry must be at most {item_max} characters",
+                            _resources(value),
+                        )
+                sub_val = list(sub_val)
             elif sub_spec["type"] == "bool":
                 if not isinstance(sub_val, bool):
-                    return _deny(f"{sub_key} must be a boolean", f"{path_key}={value}")
+                    return _deny(f"{sub_key} must be a boolean", _resources(value))
             elif sub_spec["type"] == "float":
                 # bool is an int subclass; refuse it before coercion so
                 # `true` cannot silently store 1.0.
                 if isinstance(sub_val, bool):
-                    return _deny(f"{sub_key} must be a number", f"{path_key}={value}")
+                    return _deny(f"{sub_key} must be a number", _resources(value))
                 try:
                     sub_val = float(sub_val)
                 except (TypeError, ValueError):
-                    return _deny(f"{sub_key} must be a number", f"{path_key}={value}")
+                    return _deny(f"{sub_key} must be a number", _resources(value))
                 if not math.isfinite(sub_val):
-                    return _deny(f"{sub_key} must be a finite number", f"{path_key}={value}")
+                    return _deny(f"{sub_key} must be a finite number", _resources(value))
                 lo, hi = sub_spec.get("min", 0.0), sub_spec.get("max", 999999.0)
                 if sub_val < lo or sub_val > hi:
-                    return _deny(f"{sub_key} must be between {lo} and {hi}", f"{path_key}={value}")
+                    return _deny(f"{sub_key} must be between {lo} and {hi}", _resources(value))
             else:
-                return _deny("unsupported config type", f"{path_key}={value}", 500)
+                return _deny("unsupported config type", _resources(value), 500)
             validated[sub_key] = sub_val
         value = validated
     else:
-        return _deny("unsupported config type", f"{path_key}={value}", 500)
+        return _deny("unsupported config type", _resources(value), 500)
 
     # The terminal's default shell must name a program that exists — "" clears
     # the setting (restores the $SHELL / platform default). shutil.which stats
@@ -2810,7 +2896,7 @@ async def api_kirocrew_config_patch(request: web.Request) -> web.Response:
     if path_key == "dashboard.terminal.shell" and value.strip():
         resolved = await asyncio.to_thread(shutil.which, value.strip())
         if not resolved:
-            _log_sel("denied", f"{path_key}={value}")
+            _log_sel("denied", _resources(value))
             return web.json_response(
                 {
                     "error": (
@@ -2839,7 +2925,20 @@ async def api_kirocrew_config_patch(request: web.Request) -> web.Response:
     if path_key == "dashboard.usage_text_scrape_enabled" and value is True:
         denial = await require_owner_dashboard_request(request, "config.patch.usage_text_scrape")
         if denial is not None:
-            _log_sel("denied", f"{path_key}={value}")
+            _log_sel("denied", _resources(value))
+            return denial
+
+    # ── Naming the custom ACP harness is owner-only ──
+    # This record names a PROGRAM the gateway will spawn as the agent, with the
+    # gateway's own identity. Every other backend an operator can switch to is one
+    # this build ships and probes; this one is whatever the record says. A
+    # dashboard token does not imply ownership, so the bar is the same one the
+    # backend status endpoints already hold. Gated on every write, including a
+    # clearing one: the field is the owner's, and the narrow choice costs nothing.
+    if path_key == "agent.custom_acp":
+        denial = await require_owner_dashboard_request(request, "config.patch.custom_acp")
+        if denial is not None:
+            _log_sel("denied", _resources(value))
             return denial
 
     # ── Governance: refuse a write an enterprise ceiling has pinned ──
@@ -2859,7 +2958,7 @@ async def api_kirocrew_config_patch(request: web.Request) -> web.Response:
         if pinned:
             return _deny(
                 "telemetry is disabled by your administrator's security policy",
-                f"{path_key}={value}",
+                _resources(value),
                 403,
             )
 
@@ -2899,7 +2998,7 @@ async def api_kirocrew_config_patch(request: web.Request) -> web.Response:
             )
             return _deny(
                 "could not establish the telemetry egress posture",
-                f"{path_key}={value}",
+                _resources(value),
                 409,
             )
         if egress:
@@ -2907,7 +3006,7 @@ async def api_kirocrew_config_patch(request: web.Request) -> web.Response:
                 "this host is configured to export metrics off the machine, so "
                 "enabling collection here would also start that export. Enable it "
                 "in the config file instead, where the destination is configured.",
-                f"{path_key}={value}",
+                _resources(value),
                 409,
             )
 
@@ -2927,7 +3026,7 @@ async def api_kirocrew_config_patch(request: web.Request) -> web.Response:
         if pinned:
             return _deny(
                 "tailnet access is disabled by your administrator's security policy",
-                f"{path_key}={value}",
+                _resources(value),
                 403,
             )
 
@@ -2966,7 +3065,7 @@ async def api_kirocrew_config_patch(request: web.Request) -> web.Response:
             _log_sel("error", f"{path_key}=write_failed")
             return web.json_response({"error": "failed to write config file"}, status=500)
 
-    _log_sel("success", f"{path_key}={value}")
+    _log_sel("success", _resources(value))
 
     # Everything a running gateway does in response to this write lives behind
     # ``config.live.subscribe`` (the provider switch and role-model rebuild are
@@ -2981,7 +3080,7 @@ async def api_kirocrew_config_patch(request: web.Request) -> web.Response:
     applied = live.snapshot()
     if applied is None:
         applied = await asyncio.to_thread(KiroCrewConfig.load)
-    return web.json_response(_masked_config_dict(applied))
+    return web.json_response(_config_view_for(request, applied))
 
 
 # ── Local token bootstrap (Electron / local apps) ─────────────────────

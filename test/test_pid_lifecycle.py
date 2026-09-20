@@ -4506,19 +4506,103 @@ class TestReclaimOwnsEveryHarnessItTracked:
         from kiro_crew.agent_sdk.backends import (
             ACP_BACKEND_PROCESS_NAMES,
             ACP_BACKENDS_KNOWN,
+            ACP_BACKENDS_OPERATOR_NAMED,
             agent_process_markers,
+            custom_backend_spec,
         )
 
         missing = sorted(ACP_BACKENDS_KNOWN - set(ACP_BACKEND_PROCESS_NAMES))
-        assert not missing, (
+        # An operator-named backend's process is whatever command its config names,
+        # so it has a name exactly while a spec is registered. Absent from the table
+        # with nothing registered is the honest state, not a leak: nothing can be
+        # spawned for it, so nothing can be orphaned. The registered state is
+        # ``test_the_operator_named_harness_joins_the_table_when_registered``.
+        allowed_missing = (
+            set() if custom_backend_spec() is not None else ACP_BACKENDS_OPERATOR_NAMED
+        )
+        # Exact, not a subset: the ratchet pins the coverage state in BOTH
+        # directions. A shipped harness losing its name is the leak this test
+        # exists for; the operator-named one GAINING a table row with nothing
+        # registered would mean a name was invented for a command nobody typed.
+        assert set(missing) == allowed_missing, (
             "these registered backends have no argv0 basename, so the PID-file "
-            f"reclaim cannot recognise their orphans: {missing}"
+            f"reclaim cannot recognise their orphans: {sorted(set(missing) - allowed_missing)}; "
+            f"named while unregistered: {sorted(allowed_missing - set(missing))}"
         )
         markers = agent_process_markers()
         uncovered = sorted(
             name for name in ACP_BACKEND_PROCESS_NAMES.values() if name not in markers
         )
         assert not uncovered, f"named but absent from the marker set: {uncovered}"
+
+    def test_the_operator_named_harness_joins_the_table_when_registered(self) -> None:
+        """Ratchet, other half: once a custom spec is registered its command IS its
+        process name, read from the same launch row the shipped self-served harnesses
+        read, and the reclaim recognises the command line Crew spawns it as -- by
+        position and exactly, so an unrelated process sharing only the interpreter
+        does not answer for it."""
+        from kiro_crew.agent_sdk.backends import (
+            ACP_BACKEND_CUSTOM,
+            ACP_BACKEND_PROCESS_NAMES,
+            ACP_BACKENDS_KNOWN,
+            CustomAcpSpec,
+            custom_harness_identity,
+            register_custom_backend,
+            unregister_custom_backend,
+        )
+        from kiro_crew.session_pid import _cmdline_names_a_harness
+
+        assert custom_harness_identity() is None
+        assert _cmdline_names_a_harness(b"/opt/acp/my-acp\x00serve") is False
+        spec = CustomAcpSpec(
+            command="/opt/acp/my-acp",
+            args=("serve", "--stdio"),
+            gate_option="mode",
+            gate_value="read-only",
+        )
+        register_custom_backend(spec)
+        try:
+            assert ACP_BACKEND_PROCESS_NAMES[ACP_BACKEND_CUSTOM] == "/opt/acp/my-acp"
+            assert not (ACP_BACKENDS_KNOWN - set(ACP_BACKEND_PROCESS_NAMES))
+            assert custom_harness_identity() == ("my-acp", "serve")
+            # The line Crew spawns, with and without the path the resolver added.
+            assert _cmdline_names_a_harness(b"/opt/acp/my-acp\x00serve\x00--stdio") is True
+            assert _cmdline_names_a_harness(b"my-acp\x00serve") is True
+            # Same basename, different first argument: not the harness Crew spawned.
+            assert _cmdline_names_a_harness(b"/opt/acp/my-acp\x00status") is False
+            # The basename anywhere but argv0 names nothing.
+            assert _cmdline_names_a_harness(b"/usr/bin/vim\x00my-acp\x00serve") is False
+        finally:
+            unregister_custom_backend()
+        assert custom_harness_identity() is None
+        assert ACP_BACKEND_CUSTOM not in ACP_BACKEND_PROCESS_NAMES
+
+    def test_an_interpreter_command_is_pinned_by_its_script(self) -> None:
+        """The case the first-argument pin exists for: an operator whose harness is
+        ``python3 /srv/acp/serve.py`` must not make every python3 process read as a
+        harness to the recycle guard."""
+        from kiro_crew.agent_sdk.backends import (
+            CustomAcpSpec,
+            register_custom_backend,
+            unregister_custom_backend,
+        )
+        from kiro_crew.session_pid import _cmdline_names_a_harness
+
+        register_custom_backend(
+            CustomAcpSpec(
+                command="python3",
+                args=("/srv/acp/serve.py",),
+                gate_option="mode",
+                gate_value="ask",
+            )
+        )
+        try:
+            assert _cmdline_names_a_harness(b"/usr/bin/python3\x00/srv/acp/serve.py") is True
+            assert _cmdline_names_a_harness(b"/usr/bin/python3\x00-m\x00pytest") is False
+            assert _cmdline_names_a_harness(b"/usr/bin/python3\x00/home/u/other.py") is False
+            assert _cmdline_names_a_harness(b"/usr/bin/python3") is False
+        finally:
+            unregister_custom_backend()
 
     def test_the_self_served_names_come_from_the_launch_table(self) -> None:
         """The three harnesses with a launch row are not spelled twice."""

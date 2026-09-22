@@ -1,13 +1,12 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { ApiError } from '../api/apiError'
-import { Boxes, FolderOpen, Database, Sparkles, Plus, MessageSquare, Users, Star, LayoutGrid, Rows3, UserPen } from 'lucide-react'
+import { Boxes, FolderOpen, Database, Sparkles, Plus, MessageSquare, Users, LayoutGrid, Rows3, UserPen } from 'lucide-react'
 import Clickable from '../components/Clickable'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useAppDispatch } from '../store'
 import { createSlot } from '../store/chatSlice'
 import { api, type WebhookTokenEntry } from '../api/client'
-import { useProvider } from '../providers'
 import { useAvailableModels } from '../hooks/useAvailableModels'
 import { FOLDER_COLOR_PALETTE } from '../components/folderColorCatalog'
 import { Btn, SendBtn, Input, Badge, SearchInput, PageHeader, EmptyState } from '../components/ui'
@@ -650,7 +649,6 @@ function CrewCard({ agent, isDefault, shared, onOpen }: {
   shared: SharedKind
   onOpen: () => void
 }) {
-  const provider = useProvider()
   const sharedNote = i18nT('pages.kiroCrewAgentsPage.shared_lower')
   const filesShared = shared === 'files' || shared === 'both'
   const memoryShared = shared === 'memory' || shared === 'both'
@@ -701,7 +699,7 @@ function CrewCard({ agent, isDefault, shared, onOpen }: {
         </div>
       </div>
       <div className="grid grid-cols-2 gap-x-3 gap-y-2 border-t border-border pt-3">
-        <Binding icon={<Boxes className="lucide-inline" aria-hidden="true" />} label={provider.labels.agentTemplateField} value={agent.kiro_agent} />
+        <Binding icon={<Boxes className="lucide-inline" aria-hidden="true" />} label={i18nT('pages.kiroCrewAgentsPage.custom_agent')} value={agent.kiro_agent} />
         <Binding icon={<FolderOpen className="lucide-inline" aria-hidden="true" />} label={i18nT('pages.kiroCrewAgentsPage.workspace_2')} value={agent.workspace} note={filesShared ? sharedNote : undefined} />
         <Binding icon={<Database className="lucide-inline" aria-hidden="true" />} label={i18nT('pages.kiroCrewAgentsPage.memory_store')} value={agent.memory_store} note={memoryShared ? sharedNote : undefined} />
         <Binding
@@ -803,7 +801,6 @@ function CrewRow({ agent, isDefault, shared, onOpen }: {
 }
 
 export default function KiroCrewAgentsPage({ embedded }: { embedded?: boolean } = {}) {
-  const provider = useProvider()
   const dispatch = useAppDispatch()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
@@ -1246,13 +1243,6 @@ export default function KiroCrewAgentsPage({ embedded }: { embedded?: boolean } 
     mutationFn: ({ name, data }: { name: string; data: AgentUpdatePayload; epoch: number }) => api.updateKirocrewAgent(name, data),
     onSuccess: (r: AgentMutationResult, vars) => { settleFor(vars.epoch, r.error); refetchAgents() },
     onError: (e: Error, vars) => settleFor(vars.epoch, e.message || i18nT('pages.kiroCrewAgentsPage.failed_to_update_agent')),
-  })
-  /** Promotion is its own write, fired straight from the roster bar — it is not
-   *  part of saving a crew's bindings, so it must not wait for a Save. */
-  const defaultMut = useMutation({
-    mutationFn: (n: string) => api.setDefaultAgent(n),
-    onSuccess: (r: AgentMutationResult) => { if (r.error) { setError(r.error); return }; refetchAgents() },
-    onError: (e: Error) => setError(e.message || i18nT('pages.kiroCrewAgentsPage.failed_to_update_agent')),
   })
   const deleteMut = useMutation({
     mutationFn: ({ name }: { name: string; epoch: number }) => api.deleteKirocrewAgent(name),
@@ -1855,7 +1845,7 @@ export default function KiroCrewAgentsPage({ embedded }: { embedded?: boolean } 
   const routingWords = triggers.split(',').map(s => s.trim()).filter(Boolean).length
 
   const sections = useCrewEditorSections({
-    templateLabel: provider.labels.agentTemplateField,
+    templateLabel: i18nT('pages.kiroCrewAgentsPage.built_from'),
     activeSchedules: wakeJobs.filter(j => j.enabled).length,
     totalSchedules: wakeJobs.length,
     routingWords,
@@ -1898,41 +1888,6 @@ export default function KiroCrewAgentsPage({ embedded }: { embedded?: boolean } 
           askAgent={!sheet}
           testId="crews-editor-options-load-error"
         />
-        {/* New members receive member-scoped V2; existing V1 bindings stay unchanged. */}
-        <div className="mb-3.5 flex items-start gap-2 rounded-lg border border-accent-subtle bg-bg-accent px-3 py-2.5">
-          <Sparkles className="lucide-inline mt-0.5 shrink-0 text-accent" aria-hidden="true" />
-          <span className="text-[12.5px] leading-relaxed text-muted">
-            {i18nT('pages.kiroCrewAgentsPage.bindings_member_memory_notice')}
-          </span>
-        </div>
-
-        {/* Which crew a new chat starts as, hoisted out of the cards. Two jobs:
-            it answers "which one is the default" without hunting for a badge,
-            and it is the one place that CHANGES it — a per-crew toggle could
-            only ever offer promotion (the backend refuses to unset a default
-            without naming a replacement), which read as a broken switch.
-            Pointless with a single crew, so it only appears past that. */}
-        {agents.length > 1 && (
-          <div className="mb-3.5 flex flex-wrap items-center gap-2.5 rounded-lg border border-border bg-bg-accent px-3 py-2.5">
-            <Star className="lucide-inline text-accent" aria-hidden="true" />
-            <span className="text-[13px]">{i18nT('pages.kiroCrewAgentsPage.new_sessions_use')}</span>
-            <SimpleSelect
-              options={agents.map(a => a.name)}
-              value={defaultAgent}
-              onChange={n => { setError(''); defaultMut.mutate(n) }}
-              aria-label={i18nT('pages.kiroCrewAgentsPage.new_sessions_use')}
-              style={{ width: 190 }}
-            />
-            {/* `error` is ONE state shared with the crew sheet: settleFor writes
-                the sheet's create / update / delete failures into it too, and
-                those render in the sheet's own footer without a hand-off because
-                dirtyPanes hold unsaved edits. So this copy shows only while the
-                sheet is closed (closeSheet clears the state on the way out) — the
-                only writer then is the select above, which commits immediately on
-                change, so the hand-off has no draft to destroy. */}
-            <ErrorNotice message={sheet ? null : error} variant="inline" askAgent testId="crews-default-agent-error" />
-          </div>
-        )}
 
         <div className="mb-4 flex flex-wrap items-center gap-2">
           {/* No point offering a filter over an empty roster — it just adds a
@@ -2005,7 +1960,7 @@ export default function KiroCrewAgentsPage({ embedded }: { embedded?: boolean } 
               <TableHeader>
                 <TableRow className="hover:bg-transparent">
                   <TableHead>{i18nT('pages.kiroCrewAgentsPage.crew_column')}</TableHead>
-                  <TableHead>{provider.labels.agentTemplateField}</TableHead>
+                  <TableHead>{i18nT('pages.kiroCrewAgentsPage.custom_agent')}</TableHead>
                   {/* `aria-label` keeps the column's accessible name to the
                       label itself. Without it the InfoTip's own name is
                       concatenated into the header, and a screen reader
@@ -2184,7 +2139,7 @@ export default function KiroCrewAgentsPage({ embedded }: { embedded?: boolean } 
                   </h3>
                   <BindingFields
                     subject={formSubject}
-                    templateLabel={provider.labels.agentTemplateField}
+                    templateLabel={i18nT('pages.kiroCrewAgentsPage.built_from')}
                     kiroAgentOptions={kiroAgentOptions} kiroAgent={kiroAgent} setKiroAgent={setKiroAgent}
                     templateProvenance={templateProvenance}
                     workspaceOptions={workspaceOptions} workspace={workspace} setWorkspace={setWorkspace}
@@ -2225,7 +2180,7 @@ export default function KiroCrewAgentsPage({ embedded }: { embedded?: boolean } 
                           <CrewAvatar seed={editing} avatar={editAvatar ?? undefined} size={34} />
                         </CrewAvatarButton>
                       }
-                      templateLabel={provider.labels.agentTemplateField}
+                      templateLabel={i18nT('pages.kiroCrewAgentsPage.built_from')}
                       template={kiroAgent}
                       workspace={workspace}
                       memoryStore={memoryStore}
@@ -2292,7 +2247,7 @@ export default function KiroCrewAgentsPage({ embedded }: { embedded?: boolean } 
                           onSelect={persistTemplateSwitch}
                           onRebound={setKiroAgent}
                           provenance={templateProvenance}
-                          fieldLabel={provider.labels.agentTemplateField}
+                          fieldLabel={i18nT('pages.kiroCrewAgentsPage.built_from')}
                           onSaveChain={onPaneSaveChain}
                         />
                       </>

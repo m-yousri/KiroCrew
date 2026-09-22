@@ -54,7 +54,7 @@ describe('crews create sheet — Agent Template must be explicit', () => {
     // The placeholder, NOT a pre-selected 'kirocrew'. Asserting the absence of
     // the old default is the actual regression: a trigger that reads 'kirocrew'
     // is the bug, however the placeholder happens to render.
-    expect(trigger).toHaveTextContent('Select an agent template…')
+    expect(trigger).toHaveTextContent('Select a custom agent…')
     expect(trigger).not.toHaveTextContent('kirocrew')
   })
 
@@ -68,7 +68,7 @@ describe('crews create sheet — Agent Template must be explicit', () => {
     fireEvent.click(screen.getByText('Create'))
 
     await waitFor(() =>
-      expect(screen.getByText('Agent Template is required')).toBeInTheDocument(),
+      expect(screen.getByText('Choose a custom agent to build from')).toBeInTheDocument(),
     )
     // The guard's whole point: no request is issued, so the server's own
     // refusal is a backstop rather than the only line of defence.

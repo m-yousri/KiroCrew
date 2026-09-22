@@ -103,6 +103,9 @@ export interface AgentBinding {
 
 export interface ProviderLabels {
   sessionProcess: string
+  /** Legacy: the dashboard labels a crewmate's agent field from the catalog
+   *  (`pages.kiroCrewAgentsPage.built_from`); kept so an edition's adapter
+   *  still type-checks. */
   agentTemplateField: string
   processCountLabel: string
   configFile: string

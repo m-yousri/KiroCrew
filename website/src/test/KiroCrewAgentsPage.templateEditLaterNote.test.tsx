@@ -56,7 +56,7 @@ describe('template edit-later note — create-only', () => {
     // every string in that form says "member", never "agent" — the note is
     // one of those strings, so it follows `subject` like the field hints do.
     renderWithProviders(<KiroCrewAgentsPage />, { route: '/capabilities?tab=crews&new=1&from=members' })
-    await screen.findByRole('dialog', { name: 'Add crew member' })
+    await screen.findByRole('dialog', { name: 'Add crewmate' })
     expect(screen.getByText(MEMBER_NOTE)).toBeTruthy()
     expect(screen.queryByText(/this agent/)).toBeNull()
   })

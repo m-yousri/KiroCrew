@@ -35,10 +35,10 @@ Missing history must never silently turn a private topic into Global memory.
 | `src/kiro_crew/config/prompt-orchestrator.md` | The orchestrator prompt that names `select_crew` and the delegation rule |
 | `src/kiro_crew/dashboard/handlers/agents.py` | Crew CRUD on `/api/agents`, and the roster row serializer |
 | `src/kiro_crew/dashboard/handlers/agent_catalog.py` | Read-only `/api/agents/catalog` execution choices, with separate member and template namespaces |
-| `src/kiro_crew/dashboard/handlers/agent_templates.py` | The Agent templates tab's roster (`/api/agents/templates`), create, delete with reference guard, and the read-only rule the detail PATCH applies to definition edits |
-| `website/src/pages/overview/AgentTemplatesTab.tsx` | The **Agent templates** tab of `CapabilitiesPage`: list by origin, edit the shared definition, create, delete, chat-with / enroll |
+| `src/kiro_crew/dashboard/handlers/agent_templates.py` | The Custom agents tab's roster (`/api/agents/templates`), create, delete with reference guard, and the read-only rule the detail PATCH applies to definition edits |
+| `website/src/pages/overview/AgentTemplatesTab.tsx` | The **Custom agents** tab of `CapabilitiesPage` (Customize): list by origin, edit the shared definition, create, delete, chat-with / enroll |
 | `src/kiro_crew/dashboard/handlers/members.py` | `/api/members` roster, thread get-or-create, rules, activity |
-| `website/src/pages/KiroCrewAgentsPage.tsx` | The Crews UI, mounted as the **Crews** tab of `CapabilitiesPage` (Agent Capabilities) |
+| `website/src/pages/KiroCrewAgentsPage.tsx` | The crewmate roster, mounted as the **Crewmates** tab of `CapabilitiesPage` (Customize) |
 | `website/src/components/crew/crewEditorSections.ts` | The crew editor's pane registry, including the Routing pane that edits `triggers` |
 | `website/src/components/CrewWakeSection.tsx` | "What wakes this agent" — schedules, deliberately distinct from `triggers` |
 
@@ -78,10 +78,10 @@ synchronization route (`POST /api/agents/sync`) retain their contracts, but the
 dashboard pickers no longer call sync: `useAgents` reads the catalog, so opening a
 chat, the schedule form or the channel page enrols nothing. The hook returns the
 typed list as `choices` (the chat agent pop-up renders it grouped under
-**Crewmates** / **Agent templates**, each member row wearing the same avatar the
+**Crewmates** / **Custom agents**, each member row wearing the same avatar the
 roster draws for it, the origin badge dropped because the header already says what
-a row is, and the templates group carrying a one-line hint that a template pick
-runs the shared template on the shared default memory and enrols nothing) and
+a row is, and the custom-agents group carrying a one-line hint that a custom-agent
+pick runs the shared custom agent on the shared default memory and enrols nothing) and
 the same list folded to one row per name, member first, as `agents` for the
 name-only consumers (cron `agent_id`, channel and project bindings, the cycle
 shortcuts). The pop-up draws the group headers and the templates hint only when it
@@ -100,12 +100,21 @@ member DM thread's pin covers the namespace too: the same name picked as a templ
 is refused like any other re-bind (`409 member_thread_agent_pinned`).
 Request and error contract: [learn-cron-dashboard](learn-cron-dashboard.md) → Chat.
 
-## Agent templates tab
+## Custom agents tab
 
 The Template pane inside a crew editor edits that crew's PRIVATE copy of a
-template (blueprint semantics, below). The **Agent templates** tab under Agent
-Capabilities is the other half: it manages the shared templates themselves,
-the files under `~/.kiro/agents/` a chat or a crewmate runs.
+template (blueprint semantics, below). The **Custom agents** tab under
+Customize (page title and sidebar label; route `/capabilities`) is the other
+half: it manages the shared templates themselves — "custom agents" in every
+user-facing string, the thing a crewmate is **built from** — the files under
+`~/.kiro/agents/` a chat or a crewmate runs. The tab sits flat in the pane like
+the Crewmates tab: no card, no title row (the rail tab and the page title
+already say "Custom agents"), one toolbar row with the filter on the left and
+the **New custom agent** primary button on its right (the Skills tab's rhythm),
+then the list and detail panes. The roster on the Crewmates tab likewise shows
+no page-level private-memory notice and no "New sessions use" default picker
+any more; the default crewmate is still marked by its badge on the card / row,
+and the per-binding memory tips stay.
 
 `GET /api/agents/templates` returns every global discovery row, every
 externally controlled string rendered through `_roster_mask` — the control
@@ -281,7 +290,7 @@ than the stale one and cannot PATCH the first edit away; the detail query
 shares that prefix, so the editor
 reseeds from a refetch only while the draft is clean — a dirty draft is never
 overwritten by a background refetch. Creating a template is a row switch and
-is guarded like one: **New template** asks before discarding a dirty draft,
+is guarded like one: **New custom agent** asks before discarding a dirty draft,
 and a successful create drops the previous draft and baseline BEFORE
 selecting the new row, so the reseed runs and Save can never write template
 A's edits under template B's name. A successful delete drops the draft and
@@ -328,14 +337,10 @@ title); **Enroll as
 crewmate** is the ordinary `POST /api/agents` with the template as
 `kiro_agent`, and its menu row says what it starts (a crewmate with its own
 memory, nothing running). The unsaved-changes bar names how many crewmates a
-save affects and carries both halves of the save-vs-restart model in one line
-(save; new chats use it at once; chats already running pick it up after
-**Apply & Restart**, top right), so the reader never has to reconcile a "no
-restart needed" bar with a Restart button; the page header's **Apply &
-Restart** carries its own tooltip saying what it is for (relaunching sessions
-already running); the tab's glossary also says, in visible text, that saving
-writes the file at once and Apply & Restart only relaunches running sessions
-while chats and their history stay, for the reader who never hovers. The save
+save affects and says in one line what a save does and does not reach (save;
+new chats use it at once; chats already running keep what they started with) —
+the Customize header carries no Apply & Restart button, so nothing on the page
+contradicts that line. The save
 bar wraps its buttons onto their own row below a readable text-column minimum
 rather than crushing the text at a 320px viewport. A successful save is confirmed in the bar's own
 place (the bar unmounts; a `role="status"` line takes its slot for a few
@@ -366,19 +371,16 @@ template, whose tags are inert spans, the caption says "read-only here" instead
 override" — the same word as the group heading and the banner, so one fact is
 not phrased three ways), not only how many, and the usage line uses the same words for the same fact ("Runs 2 crewmates", not "Runs as"), and both counts wear the same muted pill as the model (a normal state, not a caution — and a colored pill worded like the usage line's link would read as a second control); the read-only reasons and the missing-prompt note say outcomes ("{{product}}
 replaces this file when it updates"; "{{product}} supplies it when the
-template runs — duplicate it to write your own") rather than mechanism; the Apply & Restart
-tooltip says what a relaunch does to work in progress (chats and history stay,
-a reply in progress stops, the next message starts fresh), and the button asks
-the same in a confirm at the moment of the click (`RestartButton`), since a
-reader who reads "Restart" as breaking something never presses it from a
-hover title alone. The MCP servers heading carries a plain-word gloss beside
+agent runs — duplicate it to write your own") rather than mechanism. (`RestartButton`,
+the former Apply & Restart, still exists as a component with its confirm that
+names what a relaunch keeps and stops, but is not mounted on Customize.) The MCP servers heading carries a plain-word gloss beside
 the acronym ("external tool connections"). The Add tool
 input keeps the words "Add tool" visible as its label while open (one control
 in two states, not two controls), is wide enough for its example placeholder (`fs_write or @github/…`)
 and offers a datalist of kiro-cli's native tool names plus every name the
 template already grants (offered, not enforced); the enroll row says where
-the result lands (under Agents); the save bar's two buttons never wrap or
-shrink, and its instruction names the button by its label ("Save template"). A private copy is never a dead end: its
+the result lands (under Crewmates); the save bar's two buttons never wrap or
+shrink, and its instruction names the button by its label ("Save custom agent"). A private copy is never a dead end: its
 banner offers **Open crewmate** (the crew's Template pane, where the copy is
 edited, reset or published) instead of Duplicate to edit, and the refused-
 delete dialog names the copy with its crew as a gloss and links to the same
@@ -390,14 +392,10 @@ A list row's model badge with no stored model carries the editor's "auto
 name. The create dialog opened from a Duplicate
 affordance hides the blank/duplicate choice. A list row's package provenance
 is plain text ("Package X"), not a pill, and its padlock carries the read-only
-reason as a title; the per-template box carries the shared-edit warning, the
-tab's header is a term-led glossary — **Template**, **Chat** (a one-off
-session that runs a template; nothing is created or enrolled — said so it does
-not collide with the sidebar's Chat), **Crewmate**,
-one line each, the override defined under its own group instead — plus one
-sentence on saving vs Apply & Restart that says in visible text when a
-relaunch is needed (a chat already running picks up a saved change only after
-it) and what it keeps (chats and their history); not a second copy of that warning.
+reason as a title; the per-template box carries the shared-edit warning and
+the tab has no glossary — the rail tab's description ("What a crewmate is built
+from. Pick one when you add a crewmate.") is the one definition, and the
+override is defined under its own group.
 The delete confirm states the blast radius the guard already knows (nothing
 points at it; only the file goes; chats keep their history) rather than a
 bare file-removal warning — and is asked only when the row shows no holder:
@@ -839,8 +837,8 @@ name, and it resolves an empty crew too so the concrete template stays inside
 |---|---|
 | `test/test_agent_execution_catalog.py` | Read-only catalog, same-name member/template choices, requesting-project isolation, private-template exclusion and explicit discovery failure |
 | `test/test_agent_templates_endpoint.py` | Templates roster marks editability (a row with no spec file beneath the agents directory — empty, foreign or absent `filename` — is read-only for the runtime's reason) and references (crews, default, schedules by what they dispatch — sequence over dormant `agent_id`, the captured execution's template over a stale or empty `agent_id`, script jobs over neither — chat-folder pins, webhook pins, private copies) and masks package-controlled strings like the sibling rosters (the delete refusal's references too); a row whose filename is absolute, traversing or nested names nothing to delete (404, file intact); create writes a minimal runnable spec or a lineage-free copy (re-read inside the spec lock, where the source name is re-resolved and must reach exactly the probed file — a second claimant or a replacement refuses, nothing written) and refuses taken, bound (in the base or only in the overlay), reserved, ambiguous and malformed names; delete refuses read-only and referenced templates (listing the references), a name two files reach — a crossover or a same-name twin the roster would collapse (neither unlinked), a row whose file does not answer to the requested name, a second claimant that lands after the probe (ambiguity re-checked under the lock) and a row that calls a package file plain (the file re-read and classified under the lock), checks and unlinks inside one folder-store hold rather than from a snapshot, counts a binding that lives only in `config.local.json`, does not count a template that merely shares the default crew's alias, holds the schedule store's own lock from the reference walk through the rename (probed on both sides) and answers 503 `schedule_store_busy` with the file intact when another holder keeps it past the bounded wait, names a schedule written past the lock (warning + SEL row), fails closed on an unreadable cron store before the unlink (503, file intact) and only warns after it, retires the file as a one-deep tombstone (renamed before the older grave goes, so a refused rename keeps both; same-second graves stay distinct; the sweep spares a live template whose name looks like a grave), runs both mutations through the drained seam, and removes an unreferenced one; create re-scans by declared name under the lock; a successful create and delete emit operation-labelled SEL events; a create publishes its name to the dispatch snapshot before scheduling the rescan and a delete awaits the rescan before answering (a refusal touches neither); the detail PATCH writes the definition keys on an owned template, refuses them on a package one, refuses every key on an ambiguous name (neither file touched) and a claimant landing after the scan (re-checked under the write lock), classifies the targeted file rather than its name, and validates their shape |
-| `website/src/test/AgentTemplatesTab.test.tsx` | Grouping by origin, the two-control action row with its overflow menu (enroll hint, Delete vs Duplicate-to-edit by editability), the definition save through the detail PATCH (changed keys only — a prompt-only save never resends the model), the dirty-draft guard on row switch, on a background refetch, on Discard (asks; declined keeps the draft) and on New template (a create never inherits the previous draft), a saved skill list written into the detail cache before the refetch lands, the saved confirmation in the bar's slot and the visible Add tool label, a delete naming the deleted template over the next row and, on a narrow viewport, returning to the list, every in-app link routed through the shell's leave gate with its target, `beforeunload` armed only while dirty, a rejected detail read rendering its error rather than Loading, a refused save reported inside the save bar beside Save and cleared by Discard, resources as plain rows, string-only MCP fields from a hand-edited spec, one Skills heading, the referenced-delete dialog (opened directly from the row's own holders with no confirm or request, and from the server's refusal when a holder landed later; including a chat-folder row and a private-copy row that links to its crew), a private copy's Open crewmate, the usage line naming folder and webhook holders with each holder linked to where it is held, blank vs `from` create with the created row selected after the roster refetch, and chat-with in the template namespace (enabled while dirty, behind the discard confirm) |
-| `website/src/components/RestartButton.cov80.test.tsx` | Apply & Restart asks first, naming what stays (chats and history) and what stops (a reply in progress); declined does nothing, and the confirmed paths (success, failure, in-flight, MCP reconcile) run with the ask answered yes |
+| `website/src/test/AgentTemplatesTab.test.tsx` | Grouping by origin, the two-control action row with its overflow menu (enroll hint, Delete vs Duplicate-to-edit by editability), the definition save through the detail PATCH (changed keys only — a prompt-only save never resends the model), the dirty-draft guard on row switch, on a background refetch, on Discard (asks; declined keeps the draft) and on New custom agent (a create never inherits the previous draft), a saved skill list written into the detail cache before the refetch lands, the saved confirmation in the bar's slot and the visible Add tool label, a delete naming the deleted template over the next row and, on a narrow viewport, returning to the list, every in-app link routed through the shell's leave gate with its target, `beforeunload` armed only while dirty, a rejected detail read rendering its error rather than Loading, a refused save reported inside the save bar beside Save and cleared by Discard, resources as plain rows, string-only MCP fields from a hand-edited spec, one Skills heading, the referenced-delete dialog (opened directly from the row's own holders with no confirm or request, and from the server's refusal when a holder landed later; including a chat-folder row and a private-copy row that links to its crew), a private copy's Open crewmate, the usage line naming folder and webhook holders with each holder linked to where it is held, blank vs `from` create with the created row selected after the roster refetch, and chat-with in the template namespace (enabled while dirty, behind the discard confirm) |
+| `website/src/components/RestartButton.cov80.test.tsx` | Apply & Restart (currently unmounted) asks first, naming what stays (chats and history) and what stops (a reply in progress); declined does nothing, and the confirmed paths (success, failure, in-flight, MCP reconcile) run with the ask answered yes |
 | `test/test_chat_agent_kind.py` | `agent_kind` on slot create and switch: template picks skip the member store pin, an unresolvable stated kind is `409 agent_choice_unavailable` refused before any slot is minted, an unknown kind is `400 invalid_agent_kind`, a member thread refuses the same-name template kind, the slot projection carries the committed kind |
 | `test/test_open_slots_persistence.py` (`test_restore_carries_the_agent_selection_namespace`) | A template-picked slot restores as a template pick; an unknown persisted kind reads as name-only |
 | `test/test_select_crew.py` | Roster excludes the default crew and every triggerless crew, carries `default_agent` plus guidance; a named crew returns its bindings; an unknown name returns `error` plus `available`; the schema accepts spaces and dots in a crew name |

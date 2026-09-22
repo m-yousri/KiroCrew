@@ -154,8 +154,8 @@ async function openModelPane(crew: Record<string, unknown>): Promise<HTMLElement
   })
   renderPage()
   await waitFor(() => expect(screen.getAllByTestId('crew-card')).toHaveLength(1))
-  fireEvent.click(screen.getByRole('button', { name: 'Edit agent reviewer' }))
-  const sheet = await screen.findByRole('dialog', { name: 'Edit agent reviewer' })
+  fireEvent.click(screen.getByRole('button', { name: 'Edit crewmate reviewer' }))
+  const sheet = await screen.findByRole('dialog', { name: 'Edit crewmate reviewer' })
   fireEvent.click(within(sheet).getByTestId('crew-rail-model'))
   return sheet
 }

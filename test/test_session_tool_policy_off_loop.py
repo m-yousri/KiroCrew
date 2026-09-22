@@ -413,3 +413,58 @@ async def test_a_missing_session_key_is_refused(monkeypatch: pytest.MonkeyPatch)
     request.headers = {}
     response = await sessions_mod.api_session_tool_policy(request)
     assert response.status == 400
+
+
+@pytest.mark.asyncio
+async def test_a_plain_markdown_file_does_not_deny_every_other_agent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A non-spec ``.md`` in the agents dir must not read as an unreadable spec.
+
+    A markdown file with no frontmatter fence and no ``<stem>.json`` twin -- a
+    README, a shared prompt fragment -- is not a spec by this repo's own rule
+    (``split_markdown_spec``'s docstring, and the skip both
+    ``connections/ownership.py`` and ``agent_discovery.agent_spec_stems``
+    already apply). It declares nothing and hides nothing, so it cannot be the
+    file that holds this agent's policy. Before the fix, the unreadable-spec
+    guard parsed it as a spec, failed, and answered 409 ``policy_unreadable``
+    for EVERY agent without a spec of its own -- turning one stray file into a
+    permanent denial of every managed tool call on the gateway.
+    """
+    (tmp_path / "notes.md").write_text(
+        "# Shared prompt fragment\n\nJust prose, no frontmatter.\n", encoding="utf-8"
+    )
+    response = await _call(monkeypatch, tmp_path)
+    assert response.status == 200
+    assert _body(response) == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "content",
+    [
+        # Opens with a fence, frontmatter is not valid YAML.
+        "---\nname: [unclosed\n---\n\nbody\n",
+        # Opens with a fence that never closes: the boundary case
+        # split_markdown_spec folds into "not a spec", which this guard must
+        # NOT skip -- a truncated real spec looks exactly like this.
+        "---\nname: reviewer\n",
+    ],
+    ids=["bad-yaml", "unclosed-fence"],
+)
+async def test_a_fenced_markdown_file_that_fails_to_parse_still_denies(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, content: str
+) -> None:
+    """Only a document with NO opening fence is "not a spec".
+
+    A document that opens with ``---`` announced itself as a spec: its declared
+    name cannot be recovered without a successful parse, so the operator's
+    exclusion list may be inside it and the honest answer stays "unknown"
+    (409), exactly as before the skip was added. Widening the skip to any
+    ``.md`` that fails to read would silently convert a genuinely broken spec
+    into a missing one.
+    """
+    (tmp_path / "broken.md").write_text(content, encoding="utf-8")
+    response = await _call(monkeypatch, tmp_path)
+    assert response.status == 409
+    assert _body(response)["code"] == "policy_unreadable"

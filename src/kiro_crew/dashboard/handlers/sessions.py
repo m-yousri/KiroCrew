@@ -32,7 +32,11 @@ from kiro_crew.agent_discovery import (
     read_agent_spec_strict,
     spec_by_declared_name,
 )
-from kiro_crew.agent_spec_format import agent_spec_candidates, iter_agent_spec_files
+from kiro_crew.agent_spec_format import (
+    agent_spec_candidates,
+    is_markdown_spec,
+    iter_agent_spec_files,
+)
 
 # The migration module owns the pre-migration leftover-tab spelling.
 from kiro_crew.channel_transcript_migration import _orphan_target_stem
@@ -3494,6 +3498,39 @@ class ManagedToolPolicyUnreadable(Exception):
     """
 
 
+def _plain_markdown_document(path: Path) -> bool:
+    """Whether *path* is a markdown document with no OPENING frontmatter fence.
+
+    The rule this repo already applies twice (``connections/ownership.py``,
+    ``agent_discovery.agent_spec_stems``): a plain markdown file dropped into
+    the agents directory -- a README, a shared prompt fragment -- is not a
+    spec. It declares nothing and hides nothing, so it cannot hold any agent's
+    policy.
+
+    Deliberately NOT ``split_markdown_spec(text) is None``: that also folds in
+    a document whose fence OPENS and never closes, which announced itself as a
+    spec and may be a truncated real one -- the guard must keep refusing on
+    those. The probe here is the opening-fence test ``split_markdown_spec``
+    applies first: BOM aside, the document starts with a ``---`` line.
+
+    ``False`` on any read failure: the caller is deciding whether to SKIP a
+    file its strict reader already refused, and a file that cannot even be
+    re-read is unknown, not ignorable -- fail closed. The read goes through
+    :func:`kiro_crew.hooks.safe_read_file` (the ownership precedent's reader):
+    the agents directory is user-writable, so a symlink to a sensitive target
+    is refused, not followed.
+    """
+    from kiro_crew.hooks import safe_read_file
+
+    try:
+        text = safe_read_file(str(path))
+    except (OSError, ValueError):
+        return False
+    if text.startswith("\ufeff"):
+        text = text[1:]
+    return not text.startswith(("---\n", "---\r\n"))
+
+
 def _refuse_if_any_spec_is_unreadable(agents_dir: Path, agent_name: str) -> None:
     """Raise when a spec in *agents_dir* cannot be read, so "no match" is honest.
 
@@ -3509,6 +3546,13 @@ def _refuse_if_any_spec_is_unreadable(agents_dir: Path, agent_name: str) -> None
     unreadable is that this agent's policy is unknown. Fixing or removing the
     file clears it, and the refusal is audited by the caller.
 
+    One exception, taken only after the strict read already refused: a markdown
+    file with no opening frontmatter fence is not a spec at all (see
+    :func:`_plain_markdown_document`), so it is skipped rather than allowed to
+    deny every agent that has no spec of its own. A FENCED document that fails
+    to parse still raises: its declared name is unrecoverable, so the policy
+    stays unknown.
+
     Uses :func:`read_agent_spec_strict`, the reader that keeps the failure class,
     for exactly the reason its docstring gives: this caller needs to know WHY.
     """
@@ -3516,6 +3560,10 @@ def _refuse_if_any_spec_is_unreadable(agents_dir: Path, agent_name: str) -> None
         try:
             read_agent_spec_strict(path, operation="session_tool_policy", source="dashboard")
         except (OSError, ValueError) as exc:
+            if is_markdown_spec(path) and _plain_markdown_document(path):
+                # Not a spec (no opening fence): it cannot declare a policy,
+                # so it must not turn into a denial of every other agent.
+                continue
             raise ManagedToolPolicyUnreadable(
                 f"a spec in the agents directory could not be read "
                 f"({exc.__class__.__name__}), so the policy for {agent_name!r} is "

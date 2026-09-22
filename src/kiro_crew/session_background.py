@@ -18,6 +18,7 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator, Callable, MutableMapping, Set
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
 from kiro_crew.agent_sdk.tool_search import ToolSearchSettings
@@ -48,6 +49,8 @@ class _BackgroundRuntime(Protocol):
 
     pid: int | None
     acp_backend: str
+    #: The session tree's ``$KIROCREW_SCRATCH`` directory; a replacement inherits it.
+    work_scratch_dir: Path | None
 
     def is_alive(self) -> bool: ...
 
@@ -114,6 +117,13 @@ class BackgroundRuntimeState:
     runtime: _BackgroundRuntime | None = None
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     draining: list[_BackgroundRuntime] = field(default_factory=list)
+    #: The ``$KIROCREW_SCRATCH`` tree the sessions on the ``_bg`` runtime use,
+    #: recorded from every runtime observed in the slot and handed to each
+    #: replacement. State, not a call-local: a stale runtime is detached and
+    #: the slot cleared BEFORE its replacement spawns, so a replacement that
+    #: fails to spawn would otherwise leave the next call with no runtime to
+    #: read the tree from, and its replacement would start an empty one.
+    inherited_scratch: Path | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -468,6 +478,16 @@ class BackgroundSessionRuntime:
                     )
                 await self._owner._reap_drained_bg_runtimes_locked()
                 runtime = self._bg_runtime
+                # The runtime this call may replace, read before any detach
+                # clears the slot: its work directory is what every replacement
+                # inherits (see the spawn below). Kept on the STATE, not in a
+                # local: a detach followed by a failed replacement spawn leaves
+                # the slot empty for the next call, which must still hand the
+                # tree on. Read the way this block reads ``acp_backend``; a
+                # value that is not a path is no inheritance.
+                predecessor_scratch = getattr(runtime, "work_scratch_dir", None)
+                if isinstance(predecessor_scratch, Path):
+                    self.state.inherited_scratch = predecessor_scratch
                 configured_backend_raw = self._owner._configured_bg_backend_raw()
                 configured_backend = (
                     configured_backend_raw
@@ -519,11 +539,21 @@ class BackgroundSessionRuntime:
                                 exc_info=True,
                             )
                     agent_cfg = self._owner._cfg.agent
+                    # The replacement takes over the sessions the previous
+                    # runtime served, so it takes over their work directory
+                    # too: without this a recycle (age, RSS, backend flap, a
+                    # crash) hands every session on the runtime an EMPTY
+                    # ``$KIROCREW_SCRATCH`` mid-task, and the files it staged
+                    # for its subagents are masked from the new process.
+                    # The successor joins the directory's owner marker beside
+                    # the draining predecessor at spawn; a swept directory is
+                    # dropped there.
                     runtime = AcpRuntime(
                         agent=self._deps.runtime_agent,
                         sandbox_mode=getattr(agent_cfg, "sandbox", "auto"),
                         acp_backend=configured_backend,
                         expect_mcp_reports=False,
+                        shared_scratch=self.state.inherited_scratch,
                         # Same operator choice the foreground provider threads in;
                         # on a wire-settings host the runtime sends it explicitly
                         # (gated on the background agent's own loader grant)

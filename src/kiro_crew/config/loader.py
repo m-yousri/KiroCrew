@@ -5507,6 +5507,7 @@ class KiroCrewConfig:
             extra_env: dict[str, str] | None = None,
             reasoning_effort_override: str | None = None,
             crew_agent: str | None = None,
+            shared_scratch: Path | None = None,
             **_kwargs: object,
         ) -> AcpProvider:
             wdir = Path(cwd) if cwd else _session_work_dir(session_key)
@@ -5629,6 +5630,10 @@ class KiroCrewConfig:
                 tool_search_min_tokens=tool_search_min_tokens,
                 mcp_gateway_overlay=_gw_overlay,
                 mcp_gateway_socket=_gw_socket,
+                # A dedicated subagent process joins its parent's session tree:
+                # the tree's work directory is mounted beside its own scratch
+                # and is what its ``$KIROCREW_SCRATCH`` names (agent_scratch).
+                shared_scratch=shared_scratch,
             )
 
         return _acp

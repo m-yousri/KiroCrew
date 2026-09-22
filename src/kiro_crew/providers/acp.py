@@ -383,6 +383,7 @@ class AcpProvider(LLMProvider):
         crew_agent: str | None = None,
         member_context: bool = False,
         memory_mode: str = "persistent",
+        shared_scratch: Path | None = None,
     ) -> None:
         # An unrecognized backend would pass every ``_is_<backend>`` check and
         # spawn kiro-cli, so a typo'd config would drive the wrong agent with no
@@ -406,11 +407,19 @@ class AcpProvider(LLMProvider):
             # kiro-cli path — fully inert; a companion-registered backend threads
             # it.
             "permission_mode": permission_mode,
+            # The parent session tree's work directory for a dedicated subagent
+            # process; None for a session that starts its own tree.
+            "shared_scratch": shared_scratch,
         }
         if agent:
             kwargs["agent"] = agent
         self.member_context = member_context
         self.memory_mode = memory_mode
+        # Kept on the provider, not only on the placeholder client: on the kiro
+        # path ``_start_kiro_runtime_impl`` replaces that client with an
+        # ``AcpRuntime`` it constructs itself, and a dedicated subagent's
+        # inherited work directory has to reach THAT process.
+        self._shared_scratch: Path | None = shared_scratch
         self._client = AcpClient(**kwargs)
         # Consumer opt-in for the low-fidelity child permission downgrade
         # (see child_fidelity_aware property). Set by fidelity-aware
@@ -478,6 +487,17 @@ class AcpProvider(LLMProvider):
     def client(self) -> AcpClient:
         """Expose underlying client for backward compat (e.g. is_ready check)."""
         return self._client
+
+    @property
+    def work_scratch_dir(self) -> Path | None:
+        """The session tree's ``$KIROCREW_SCRATCH`` directory (H14 capability).
+
+        Read off whichever process serves this session -- the placeholder
+        ``AcpClient`` before start, the ``AcpSessionProvider`` the kiro path
+        swaps in after -- so the answer is the directory the live process
+        actually exposes, never the one it was asked for.
+        """
+        return self._client.work_scratch_dir
 
     @property
     def child_fidelity_aware(self) -> bool:
@@ -1068,6 +1088,10 @@ class AcpProvider(LLMProvider):
             tool_search=self._tool_search_settings(),
             member_context=self.member_context,
             memory_mode=self.memory_mode,
+            # A dedicated subagent's inherited work directory (agent_scratch):
+            # this runtime, not the placeholder client, is the process the
+            # subagent runs in, so the second window has to be mounted HERE.
+            shared_scratch=self._shared_scratch,
         )
         _t_spawn = time.monotonic()
         try:
@@ -1210,6 +1234,7 @@ class AcpProvider(LLMProvider):
                         tool_search=self._tool_search_settings(),
                         member_context=self.member_context,
                         memory_mode=self.memory_mode,
+                        shared_scratch=self._shared_scratch,
                     )
                     try:
                         await runtime.spawn()

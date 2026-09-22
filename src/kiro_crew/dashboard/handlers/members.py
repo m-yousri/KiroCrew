@@ -1214,3 +1214,150 @@ async def api_member_rules_put(request: web.Request) -> web.Response:
         # cold session picks the new rules up at its next start regardless.
         logger.debug("could not flag member session for reinjection", exc_info=True)
     return web.json_response({"slug": slug, "ok": True})
+
+
+# ── One-time crewmate opt-in for existing custom agents ──
+#
+# An existing user who reaches the Crewmates page with custom agents under
+# ``~/.kiro/agents`` but no crewmate yet is offered, ONCE, to turn those agents
+# into crewmates. The listing below is the candidate set for that step; the
+# ``done`` flag is the one-time gate, persisted in ``config.json``
+# (``dashboard.crewmate_optin_done``) like the other first-run flags so a second
+# browser is not shown the step again. Creating the crewmates themselves goes
+# through the existing ``POST /api/agents`` — this surface adds no second create
+# path.
+
+
+def _optin_candidates(cfg: KiroCrewConfig, usage: dict[str, tuple[int, float]]) -> list[dict]:
+    """Thread-side: the custom agents that could become crewmates.
+
+    A candidate is a GLOBAL spec on disk that a crewmate could be built from and
+    that no crewmate is built from yet. Excluded, in the words the sync path
+    uses for the same decisions: the runtime's own specs (``kirocrew*``, the
+    conductors — ``kirocrew_owned`` / ``source == "kirocrew"``), a crew's
+    private copy (``private_to``), a name already registered as a crew or bound
+    as one's ``kiro_agent``, and a name the create route would refuse (grammar
+    or credential-shaped). Every externally controlled string reaches the
+    browser through ``_roster_mask``, the same mask the agent roster applies.
+    """
+    from kiro_crew.agent import kiro_agents_dir_path
+    from kiro_crew.agent_discovery import list_agents
+    from kiro_crew.dashboard.handlers.agents import _name_would_be_masked, _roster_mask
+
+    bound = {a.kiro_agent for a in cfg.agents.values()} | set(cfg.agents.keys())
+    rows: list[dict] = []
+    for info in list_agents(agents_dir=kiro_agents_dir_path()):
+        if info.source == "kirocrew" or info.kirocrew_owned or info.private_to:
+            continue
+        if not info.filename or info.name in bound:
+            continue
+        if not _AGENT_NAME_RE.match(info.name) or _name_would_be_masked(info.name):
+            continue
+        chats, last_used = usage.get(info.name, (0, 0.0))
+        rows.append(
+            {
+                "name": info.name,
+                "description": _roster_mask(info.description),
+                "source": normalize_member_source(info.source),
+                "chats": chats,
+                "last_used_ts": last_used,
+            }
+        )
+    # Used agents first, most recently used on top, then the never-used ones by
+    # name: the step pre-checks the used ones, so they are what the eye lands on.
+    rows.sort(key=lambda r: (-r["chats"], -r["last_used_ts"], r["name"].lower()))
+    return rows
+
+
+async def api_members_optin(request: web.Request) -> web.Response:
+    """GET /api/members/optin — the one-time opt-in step's state and candidates.
+
+    ``done`` is the persisted gate (``dashboard.crewmate_optin_done``);
+    ``crewmates`` is how many crews are registered, so the page can decide to
+    show the step (not done, zero crewmates, at least one candidate) from one
+    read instead of three. ``candidates`` carries each custom agent's chat count
+    from session history (``agent_usage`` — one per logical conversation the
+    agent was the selected agent of), which is what the step pre-checks on.
+    """
+    denied = await _deny_app_caller(request, "members.optin")
+    if denied is not None:
+        return denied
+    state: DashboardState | None = request.app.get("state")
+    cfg = await asyncio.to_thread(KiroCrewConfig.load)
+    usage: dict[str, tuple[int, float]] = {}
+    conversation_log = state.conversation_log if state else None
+    if conversation_log is not None:
+        try:
+            usage = await asyncio.to_thread(conversation_log.agent_usage)
+        except Exception:
+            # Counts are a hint for the pre-check, never a gate: an unreadable
+            # history degrades to "used in 0 chats", not to no step.
+            logger.warning("crewmate opt-in: agent usage unavailable", exc_info=True)
+    try:
+        from kiro_crew.executors import discovery_executor
+
+        candidates = await asyncio.get_running_loop().run_in_executor(
+            discovery_executor(), _optin_candidates, cfg, usage
+        )
+    except Exception:
+        logger.warning("crewmate opt-in: candidate scan failed", exc_info=True)
+        return web.json_response(
+            {
+                "error": "Your custom agents could not be listed. Retry.",
+                "code": "optin_candidates_unavailable",
+            },
+            status=503,
+        )
+    return web.json_response(
+        {
+            "done": cfg.dashboard.crewmate_optin_done,
+            "crewmates": sum(1 for name in cfg.agents if _AGENT_NAME_RE.match(name)),
+            "candidates": candidates,
+        }
+    )
+
+
+def _persist_optin_done() -> None:
+    # DELTA read-modify-write of the one key this endpoint owns, inside a
+    # single sidecar-flock hold — a whole-document save() would publish a
+    # snapshot that can revert a concurrent writer's unrelated settings (the
+    # same shape as the import chapter's ``_persist_state``). Called off the
+    # loop via run_config_write.
+    from kiro_crew.config.loader import coerce_dict_section, update_config_locked
+
+    def _mutate(doc: dict) -> dict:
+        coerce_dict_section(doc, "dashboard")["crewmate_optin_done"] = True
+        return doc
+
+    update_config_locked(mutate=_mutate)
+
+
+async def api_members_optin_done(request: web.Request) -> web.Response:
+    """POST /api/members/optin/done — record that the one-time step is over.
+
+    Both exits of the step land here: "Not now" and a completed add. Owner-only
+    like every other first-run-flag write; idempotent (a second call finds the
+    flag already set and answers the same). There is no way back through the
+    API by design — the step is offered once, and re-offering it is a config
+    edit (``dashboard.crewmate_optin_done: false``), not a button.
+    """
+    denied = await _deny_app_caller(request, "members.optin")
+    if denied is not None:
+        return denied
+    owner_denied = await require_owner_dashboard_request(request, "members.optin.done")
+    if owner_denied is not None:
+        return owner_denied
+    from kiro_crew.dashboard.chat_utils import run_config_write
+
+    try:
+        await run_config_write(_persist_optin_done)
+    except OSError as exc:
+        logger.warning("crewmate opt-in: could not persist dismissal: %s", exc)
+        return web.json_response(
+            {
+                "error": "The choice could not be saved. Retry.",
+                "code": "optin_persist_failed",
+            },
+            status=503,
+        )
+    return web.json_response({"ok": True, "done": True})

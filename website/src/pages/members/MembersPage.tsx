@@ -41,6 +41,7 @@ import { ArrowLeft, Check, ChevronRight, Circle, Clock, Cloud, ExternalLink, Goa
 import { PanelRightSolid } from '../../components/icons/panels'
 import { CrewMemberMark } from '../../components/CrewMemberMark'
 import DeployMyCrewDialog from './DeployMyCrew'
+import CrewmateOptIn from './CrewmateOptIn'
 import { useTranslation } from 'react-i18next'
 import { api, type MemberActivityEntry, type MemberRosterRow, type WebhookTokenEntry } from '../../api/client'
 import {
@@ -2044,6 +2045,10 @@ export default function MembersPage() {
     // does in the chat page's actbar column; the card columns' pr-2 lives on
     // the inner wrapper below.
     <div className="flex h-full min-h-0" data-testid="members-page">
+      {/* One-time step for an existing user with custom agents and no
+          crewmate yet. Decides for itself whether it is due (one server
+          read) and renders nothing otherwise; see CrewmateOptIn.tsx. */}
+      <CrewmateOptIn />
       {/* Card columns (roster + thread) keep the page's original insets. */}
       <div className="flex flex-1 min-w-0 gap-2 pr-2 pb-2">
       {/* Member list. Below md the page is single-pane: the roster IS the

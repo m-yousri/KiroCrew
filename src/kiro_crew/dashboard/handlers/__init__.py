@@ -262,6 +262,8 @@ from kiro_crew.dashboard.handlers.members import (  # noqa: E402, F401
     api_member_rules_put,
     api_member_thread,
     api_members,
+    api_members_optin,
+    api_members_optin_done,
 )
 from kiro_crew.dashboard.handlers.memory import (  # noqa: E402, F401
     _get_vector_store,

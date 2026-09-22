@@ -6775,6 +6775,7 @@
         "onboarded": false,
         "import_onboarded": false,
         "privacy_acked": false,
+        "crewmate_optin_done": false,
         "user_role": "",
         "user_role_other": "",
         "user_technical_level": "",
@@ -7625,6 +7626,20 @@
       "tags": [],
       "label": "Privacy Acknowledged",
       "help": "Whether the user has seen the mandatory first-run Privacy chapter, which discloses the anonymous heartbeat and offers the opt-out. Server-backed rather than browser-local because the gateway gates the very FIRST heartbeat on it: until this is true the user has not yet been shown the opt-out, and a ping sent before the offer makes the offer meaningless.",
+      "hasChildren": false,
+      "enumValues": null,
+      "defaultValue": false
+    },
+    {
+      "path": "dashboard.crewmate_optin_done",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "label": "Crewmate Opt-in Done",
+      "help": "Whether the one-time 'Meet your crewmates' step has been completed or dismissed. The step is offered once to an existing user who already has custom agents under ~/.kiro/agents but no crewmate yet, on their first visit to the Crewmates page; both 'Not now' and adding the crewmates set this, so it is never shown twice. Server-backed like the other first-run flags so it holds across browsers.",
       "hasChildren": false,
       "enumValues": null,
       "defaultValue": false

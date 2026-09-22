@@ -6917,7 +6917,23 @@
       "failed_to_load_app": "Failed to load app"
     },
     "membersPage": {
-      "drawer_delegated_working": "Delegated work running"
+      "drawer_delegated_working": "Delegated work running",
+      "optin_eyebrow": "Crewmates",
+      "optin_aside_headline": "Meet CrewMates",
+      "optin_aside_body": "A crewmate is a custom agent with a name, its own memory and its own chat. It remembers what it learned and tells you what it did.",
+      "optin_aside_footnote": "You can add or remove crewmates any time.",
+      "optin_title": "Meet your crewmates",
+      "optin_lead": "Your custom agents can become crewmates: each keeps its own memory, has its own chat, and reports its work in notes you can read any time.",
+      "optin_list_heading": "Your custom agents · {{count}}",
+      "optin_chats_one": "{{count}} chat",
+      "optin_chats_other": "{{count}} chats",
+      "optin_chats_none": "used in 0 chats",
+      "optin_not_now": "Not now",
+      "optin_add_one": "Add {{count}} crewmate",
+      "optin_add_other": "Add {{count}} crewmates",
+      "optin_note": "Nothing changes for your existing chats.",
+      "optin_add_failed": "Could not add “{{name}}”. Try again.",
+      "optin_close_failed": "Your choice could not be saved. Try again."
     }
   },
   "privacyDisclosure": {

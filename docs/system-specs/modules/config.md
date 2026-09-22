@@ -1967,6 +1967,7 @@ class DashboardConfig:
     language: str = ""             # dashboard UI language, BCP-47 (e.g. "en", "zh-CN"); empty = auto-detect from the browser. See "Dashboard UI language" below.
     onboarded: bool = False         # whether the "Choose your look" onboarding modal was completed
     import_onboarded: bool = False  # whether foreign-agent import was completed or skipped
+    crewmate_optin_done: bool = False  # whether the one-time "Meet your crewmates" step was completed or dismissed (see "Crewmate opt-in state" below)
     tips_enabled: bool = True      # feature-discovery tips (GET /api/tips/next); live-read
     tips_cadence_hours: float = 6.0    # min hours between surfaced tips (server-side gate; clamped >= 0)
     tips_snooze_hours: float = 48.0    # hours before a snoozed tip is eligible again (clamped >= 0)
@@ -2618,6 +2619,18 @@ The frontend also recognizes the older browser-only `mc-onboarded` marker when
 no `mc-import-onboarded` marker exists. Before applying false server defaults,
 it persists both onboarding flags through `PUT /api/config/theme`; an explicit
 newer import marker remains a cache only and continues to yield to server state.
+
+### Crewmate opt-in state
+
+`DashboardConfig.crewmate_optin_done` gates the one-time "Meet your crewmates"
+step the Crewmates page offers an existing user who already has custom agents
+under `~/.kiro/agents` but no crew (see
+[crew-mode](crew-mode.md#one-time-opt-in-for-existing-custom-agents)). It is
+server-backed like the other first-run flags so a second browser is not shown
+the step again, and it has NO legacy fallback: an already-onboarded user is
+exactly who the step is for, so an absent key means "not yet shown", never
+"done". Both exits of the step set it through `POST /api/members/optin/done`, a
+delta write under `update_config_locked`; nothing resets it through the API.
 
 Foreign settings are never deep-merged into `config.json`. The importer applies
 only its explicit non-security settings allowlist, preserves every existing

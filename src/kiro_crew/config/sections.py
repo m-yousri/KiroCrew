@@ -3509,6 +3509,18 @@ class DashboardConfig:
             "opt-out, and a ping sent before the offer makes the offer meaningless.",
         ),
     )
+    crewmate_optin_done: bool = field(
+        default=False,
+        metadata=_meta(
+            "Crewmate Opt-in Done",
+            "Whether the one-time 'Meet your crewmates' step has been completed or "
+            "dismissed. The step is offered once to an existing user who already "
+            "has custom agents under ~/.kiro/agents but no crewmate yet, on their "
+            "first visit to the Crewmates page; both 'Not now' and adding the "
+            "crewmates set this, so it is never shown twice. Server-backed like "
+            "the other first-run flags so it holds across browsers.",
+        ),
+    )
     user_role: str = field(
         default="",
         metadata=_meta(

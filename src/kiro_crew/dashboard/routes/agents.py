@@ -66,6 +66,10 @@ def register(app: web.Application) -> None:
     app.router.add_post("/api/capability/plugins/sync", handlers.api_capability_plugins_sync)
     # Crew Members (roster + per-member pinned DM thread)
     app.router.add_get("/api/members", handlers.api_members)
+    # Static segments registered BEFORE the ``{slug}`` routes below so a crew
+    # slugged ``optin`` can never shadow the one-time step's surface.
+    app.router.add_get("/api/members/optin", handlers.api_members_optin)
+    app.router.add_post("/api/members/optin/done", handlers.api_members_optin_done)
     app.router.add_post("/api/members/{slug}/thread", handlers.api_member_thread)
     app.router.add_get("/api/members/{slug}/activity", handlers.api_member_activity)
     app.router.add_get("/api/members/{slug}/rules", handlers.api_member_rules_get)

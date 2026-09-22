@@ -3335,6 +3335,9 @@ def _build_dashboard_config(_degraded: set[str], dashboard_data: dict) -> Dashbo
             dashboard_data.get("privacy_acked"),
             _safe_bool(dashboard_data.get("onboarded"), False),
         ),
+        # No legacy fallback: an already-onboarded user is exactly who this
+        # one-time step is for, so it must default to "not yet shown".
+        crewmate_optin_done=_safe_bool(dashboard_data.get("crewmate_optin_done"), False),
         user_role=str(dashboard_data.get("user_role", "")),
         user_role_other=str(dashboard_data.get("user_role_other", "")),
         user_technical_level=str(dashboard_data.get("user_technical_level", "")),

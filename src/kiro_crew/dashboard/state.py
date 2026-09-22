@@ -404,6 +404,140 @@ def _slots_serialization_note(slots_data: object, *, path: str = "slots-broadcas
         return f"[{path}] slot projection is not JSON-serializable (offender walk failed)"
 
 
+#: Guards :func:`_request_lineage_seed` so a burst of slot frames arriving before the
+#: projection is seeded costs ONE seed rather than one per frame.
+_lineage_seed_lock = threading.Lock()
+_lineage_seed_in_flight = False
+
+
+def _attach_slot_parents(rows: "list[dict]") -> None:
+    """Give every slot row its ``parent`` -- ``{slot, key}`` or ``None``. IN PLACE.
+
+    This is what lets the chat sidebar nest a session under the one that opened it
+    through ``session_create``: the sidebar already receives the slots broadcast, so
+    the edge rides a frame it gets anyway rather than a route it would have to poll.
+
+    The SHAPE is byte-identical to the Sessions table's ``parent`` -- same two keys,
+    same meaning, same ``key: None`` for a creator that is not running or sits on a
+    cycle -- because one moved ``nestsUnder`` serves both views and a second shape
+    would be a second way to nest the same gateway. What differs, necessarily, is the
+    KEY SPACE: ``key`` names the creator's row IN THIS PAYLOAD, so here it is the bare
+    slot key and on the memory payload it is the full ``dashboard:`` session key.
+    ``nestsUnder`` resolves ``parent.key`` against its own payload's keys, so that is
+    the invariant it needs; a session key here would name no row and every child would
+    silently detach.
+
+    Whole-population work, so it lives after the per-slot loop rather than inside
+    :meth:`DashboardState.serialize_slot`: resolving a citation to a LIVE creator needs
+    every row's key, which one slot does not have.
+
+    NO DISK, and no blocking, because this runs on the event loop. The lineage is read
+    only when the projection is ALREADY seeded for the store now configured; otherwise
+    every row ships ``parent: None`` for this frame and the seed is handed to the
+    maintenance pool. Seeding is a checkpoint load plus a names-only listing, or on the
+    very first boot of this build one full scan -- work measured in milliseconds but
+    still disk, and disk on this loop stalls every other request and the heartbeat
+    behind it.
+
+    It does NOT broadcast when the seed lands, and that is deliberate. Every path that
+    would -- ``push_slots_update``, the trailing timer, a frame of its own -- either
+    writes the coalescer's clock or adds a frame, and both are load-bearing elsewhere: a
+    request inside ``suspend_slots_push`` needs that window open so its own flush
+    broadcasts INLINE and a broadcast failure reaches its caller, and the create path
+    pins exactly one coalesced frame per change. So the first frame after a cold start
+    ships no parents and the NEXT ordinary broadcast carries the edges. A sidebar that
+    nests one frame late is a much smaller cost than either contract.
+
+    Nor is the seed started at boot, which would close that one-frame window: seeding is
+    bound to one store and re-runs when the data home changes, so a process serving
+    several homes would queue a full cold scan per bind onto the shared maintenance pool.
+
+    Never raises, and every row gets the key either way. A sidebar that cannot paint is
+    a worse failure than a sidebar that does not nest, and a row silently MISSING the
+    key would make the frontend's ``parent === undefined`` mean two different things.
+    """
+    if not rows:
+        return
+    parents: dict = {}
+    try:
+        from kiro_crew.crew_log import emit as crew_log_emit
+
+        # Checked BEFORE the storage import, the way the memory payload's ``_lineage``
+        # does it. With the crew log off there are no records to read and never will
+        # be, so seeding would scan a store nobody is writing -- and every row's answer
+        # is the same ``None`` either way.
+        if not crew_log_emit.enabled():
+            for row in rows:
+                row["parent"] = None
+            return
+
+        from kiro_crew.crew_log.session_tree_projection import projection
+        from kiro_crew.dashboard.session_memory import lineage_parents
+
+        proj = projection()
+        if proj.seeded_for_current_store:
+            parents = lineage_parents(rows, proj.nodes())
+        else:
+            _request_lineage_seed()
+    except Exception:
+        # Includes the crew log being off, in which case there are no records and no
+        # lineage to report -- not an error, and not worth a warning on a hot path.
+        logger.debug("slot lineage could not be resolved; slots ship without parents")
+    for row in rows:
+        key = row.get("key")
+        row["parent"] = parents.get(key) if isinstance(key, str) else None
+
+
+def _request_lineage_seed() -> None:
+    """Seed the session-tree projection on the maintenance pool. Returns immediately.
+
+    One seed in flight at a time. The guard is an in-flight flag rather than a
+    once-per-process latch, because the projection legitimately needs re-seeding when
+    the data home changes underneath the process -- a latch would leave the sidebar
+    permanently un-nested after a pod or a relocated home, which is the bug the flag
+    avoids while still collapsing a burst of frames into one seed.
+
+    Never raises. A pool that will not take the job leaves the flag clear so the next
+    caller can try, and until some seed succeeds every row simply ships no parent.
+
+    A no-op with the crew log off: there are no records to fold, so seeding would only
+    scan a store nobody is writing.
+    """
+    global _lineage_seed_in_flight
+    try:
+        from kiro_crew.crew_log import emit as crew_log_emit
+
+        if not crew_log_emit.enabled():
+            return
+    except Exception:
+        return
+    with _lineage_seed_lock:
+        if _lineage_seed_in_flight:
+            return
+        _lineage_seed_in_flight = True
+
+    def _seed() -> None:
+        global _lineage_seed_in_flight
+        try:
+            from kiro_crew.crew_log.session_tree_projection import projection
+
+            projection().ensure_seeded()
+        except Exception:
+            logger.debug("session tree projection could not be seeded", exc_info=True)
+        finally:
+            with _lineage_seed_lock:
+                _lineage_seed_in_flight = False
+
+    try:
+        from kiro_crew.executors import maintenance_executor
+
+        maintenance_executor().submit(_seed)
+    except Exception:
+        with _lineage_seed_lock:
+            _lineage_seed_in_flight = False
+        logger.debug("lineage seed could not be scheduled", exc_info=True)
+
+
 def _slots_ws_frame(
     slots: object,
     *,
@@ -7549,6 +7683,7 @@ class DashboardState:
             )
             d["subagents_running"] = bool(subs and subs.running_agents_for(f"dashboard:{s.key}"))
             out.append(d)
+        _attach_slot_parents(out)
         return out
 
     def _drop_orphaned_mcp_report(self, slot: "_ChatSlot") -> None:
@@ -7709,6 +7844,13 @@ class DashboardState:
         Called from an app startup hook: that is the earliest point the loop
         exists, so every later reader finds it already bound instead of racing to
         latch a copy from whichever thread happens to arrive first.
+
+        Deliberately does NOT seed the session-lineage projection. Seeding is bound to
+        one store and re-runs whenever the data home changes, so a process that binds
+        several states over several homes -- a test run, a pod host -- would queue one
+        full cold scan per bind onto the shared maintenance pool and starve everything
+        else waiting on it. The seed is requested lazily instead, by the first slots
+        frame that finds the projection cold (see :func:`_attach_slot_parents`).
         """
         self._serving_loop = loop
 

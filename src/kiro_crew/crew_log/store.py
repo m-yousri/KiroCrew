@@ -498,6 +498,20 @@ def remove_unit(kind: str, unit_id: str, *, guard: "Callable[[Path], bool]") -> 
         # Every file this owns is gone. A directory that will not go is residue,
         # not retained history, so the removal still counts -- but say so.
         logger.debug("crew log retention: %s log %r directory not removed", kind, unit_id)
+    if kind == KIND_SESSION:
+        # The session tree projection holds this unit's lineage edge in memory, and
+        # the disk it was folded from has stopped holding it. Dropped HERE, at the one
+        # point the removal is established, rather than in the sweep: ``remove_unit``
+        # is also reached by a direct delete, and a projection updated only by the
+        # retention pass would keep serving an edge into a unit that is gone.
+        #
+        # Deliberately after the ``rmdir``, which is allowed to fail: what makes the
+        # record wrong is that the unit's SEGMENTS are gone, and an empty directory
+        # left standing is residue that answers no record either way. Imported here
+        # because the projection imports this module for the root and the replay.
+        from kiro_crew.crew_log.session_tree_projection import forget_unit
+
+        forget_unit(unit_id)
     return REMOVE_REMOVED
 
 

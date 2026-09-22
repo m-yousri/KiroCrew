@@ -1,7 +1,7 @@
 import { useState, useRef, useReducer, useEffect, useLayoutEffect, memo, useMemo, useCallback, useId, Fragment } from 'react'
 import { createPortal } from 'react-dom'
 import { LayoutGroup, AnimatePresence, motion } from 'framer-motion'
-import { Plus, X, Pin, Monitor, Eye, EyeOff, VenetianMask, Ghost, FolderPlus, MessageSquare, MessageSquarePlus, MessagesSquare, Folder, ChevronRight, ChevronDown, ChevronUp, Clock, Pencil, BrushCleaning, Link2, Circle, MoreVertical, Tag as TagIcon, Columns3, GripVertical, Zap, Check, Copy, List, Loader, Loader2, Settings, RotateCcw, Bot, ExternalLink, Cpu, GitMerge, Workflow, CircleDot, Users, TriangleAlert, Goal, MessageCircleQuestionMark, ShieldCheck, Repeat, Server } from 'lucide-react'
+import { Plus, X, Pin, Monitor, Eye, EyeOff, VenetianMask, Ghost, FolderPlus, MessageSquare, MessageSquarePlus, MessagesSquare, Folder, ChevronRight, ChevronDown, ChevronUp, Clock, Pencil, BrushCleaning, Link2, Circle, MoreVertical, Tag as TagIcon, Columns3, CornerDownRight, GripVertical, Zap, Check, Copy, List, ListTree, Loader, Loader2, Settings, RotateCcw, Bot, ExternalLink, Cpu, GitMerge, Workflow, CircleDot, Users, TriangleAlert, Goal, MessageCircleQuestionMark, ShieldCheck, Repeat, Server } from 'lucide-react'
 import GithubLogo from '../components/icons/GithubLogo'
 import GitlabLogo from '../components/icons/GitlabLogo'
 import { FolderBody } from '../components/FolderBody'
@@ -48,6 +48,7 @@ import { useListboxKeyboard } from '../hooks/useListboxKeyboard'
 import { useDndSensors } from '../hooks/useDndSensors'
 import { useSessionPalette } from '../hooks/useSessionPalette'
 import { useMoveSlotToFolder } from '../hooks/useMoveSlotToFolder'
+import { ancestorsOf, buildLineage, descendantsOf, orphanCitation } from '../lib/sessionLineage'
 import useMoveUndo from '../hooks/useMoveUndo'
 import { useSelectInstance } from '../hooks/useSelectInstance'
 import { useReducedMotion } from '../hooks/useReducedMotion'
@@ -798,6 +799,17 @@ interface Slot {
   key: string
   title?: string
   running: boolean
+  /**
+   * The session that OPENED this one through `session_create`, or null when nobody
+   * did. Comes straight off the slots broadcast (`_attach_slot_parents`).
+   *
+   * `slot` is this session's own citation, read from its crew log, and survives
+   * everything. `key` is the creator's row key IN THIS PAYLOAD -- so a bare slot key
+   * here, matching `Slot.key` -- and is null when the creator is not running or the
+   * records formed a cycle. A row can therefore cite a creator it cannot nest under,
+   * which is the orphan the conductor lane marks with a muted prefix.
+   */
+  parent?: { slot?: string; key?: string | null } | null
   /** Peer OWNERSHIP, present ONLY on a row sourced from a connected remote
    *  instance's live slot list (see `useInstanceSessions`). Absent on every local
    *  slot, so a consumer tests presence to decide whether the local-only
@@ -1940,7 +1952,7 @@ const SessionRow = memo(function SessionRow({
     // tree position into the flat lane (and back). Safe: the two views are
     // ternary branches — never mounted simultaneously — so IDs can't collide.
     // Behavior stays keyed on the real scope.
-    const layoutScope = scope === 'flat' ? 'list' : scope
+    const layoutScope = scope === 'flat' || scope === 'conductor' ? 'list' : scope
     // List and flat rows use dnd-kit. Board columns retain native HTML5 drag
     // because a card drop there changes status-column membership.
     //
@@ -3094,8 +3106,74 @@ export const SORT_LABEL_KEY: Record<SortKey, string> = {
   'name-asc': 'pages.chatSidebar.sort_name_asc',
   'name-desc': 'pages.chatSidebar.sort_name_desc',
 }
-/** Flat view ("explode chats out of folders") persistence key. */
+/** Flat view ("explode chats out of folders") persistence key.
+ *
+ *  LEGACY. Superseded by `SIDEBAR_LANE_LS_KEY`, and still read once at mount so a
+ *  user who had flat view on keeps it: see `readStoredLane`. Still WRITTEN by the
+ *  folder-create path, which turns flat view off, because a build that rolls back
+ *  must not strand that user in a lane they were moved out of.
+ */
 const FLAT_VIEW_LS_KEY = 'mc-sidebar-flat-view'
+
+/**
+ * Which session lane the list renders. One persisted preference, three values.
+ *
+ * `tree` is the folder hierarchy. `flat` explodes every chat out of its folder into
+ * one recency-sorted lane. `conductor` nests each session under the session that
+ * OPENED it (`session_create`), which is a different axis from folders entirely: a
+ * conductor and the workers it spawned are one unit of work wherever their folders
+ * put them.
+ *
+ * An enum rather than two booleans because the lanes are mutually exclusive, and two
+ * independent flags would have a fourth state ("flat AND conductor") that means
+ * nothing and that every render site would have to decide about.
+ */
+type SidebarLane = 'tree' | 'flat' | 'conductor'
+
+/** Lane preference. Replaces the `FLAT_VIEW_LS_KEY` boolean. */
+const SIDEBAR_LANE_LS_KEY = 'mc-sidebar-lane'
+
+/** How many levels of conductor nesting still step the row to the right.
+ *
+ *  Lineage depth has no ceiling -- a conductor that opens a conductor nests as far as
+ *  the work does -- and each level costs 14px of a sidebar that is 320px at its
+ *  narrowest. Left uncapped, a deep chain walks the card off the right edge until the
+ *  title is unreadable. Past this depth the rows stop stepping and the level is shown
+ *  as a number instead, which keeps the information without the geometry. */
+const CONDUCTOR_MAX_INDENT_DEPTH = 6
+
+/** Which conductor rows the user has expanded, as a JSON array of root keys. */
+const CONDUCTOR_EXPANDED_LS_KEY = 'mc-sidebar-conductor-expanded'
+
+/**
+ * The persisted lane, migrating the boolean this replaced.
+ *
+ * A stored `'1'` under the old key was flat view ON, so that user opens in `flat`
+ * rather than being silently reset to the tree. The new key wins whenever it holds a
+ * value this build recognises: an unknown string is treated as absent rather than
+ * refused, because the only honest reading of a lane name from a future build is
+ * "not one of mine".
+ */
+function readStoredLane(): SidebarLane {
+  const stored = localStorage.getItem(SIDEBAR_LANE_LS_KEY)
+  if (stored === 'tree' || stored === 'flat' || stored === 'conductor') return stored
+  return localStorage.getItem(FLAT_VIEW_LS_KEY) === '1' ? 'flat' : 'tree'
+}
+
+/** The expanded conductor roots, or an empty set when the value is unusable. */
+function readConductorExpanded(): Set<string> {
+  try {
+    const raw = localStorage.getItem(CONDUCTOR_EXPANDED_LS_KEY)
+    if (!raw) return new Set()
+    const parsed: unknown = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return new Set()
+    return new Set(parsed.filter((k): k is string => typeof k === 'string' && k !== ''))
+  } catch {
+    // Collapsed-by-default is the documented default, so an unreadable value costs
+    // the user one re-expand rather than an error they cannot act on.
+    return new Set()
+  }
+}
 
 import { SIDEBAR_MIN, SIDEBAR_MAX } from './chat/sidebarWidth'
 export { SIDEBAR_MIN, SIDEBAR_MAX } from './chat/sidebarWidth'
@@ -3716,10 +3794,26 @@ function ChatSidebar({
   // recency-sorted list, for working temporally across many folders ("what's
   // the latest?"). Pure view projection — folder membership is untouched, and
   // toggling back restores the folder tree exactly as it was.
-  const [flatView, setFlatView] = useState(() => localStorage.getItem(FLAT_VIEW_LS_KEY) === '1')
-  const toggleFlatView = useCallback(() => {
-    setFlatView(v => { const next = !v; safeSetItem(FLAT_VIEW_LS_KEY, next ? '1' : '0'); return next })
+  const [lane, setLane] = useState<SidebarLane>(readStoredLane)
+  /** Derived, so every existing `flatView` read site keeps its exact meaning. */
+  const flatView = lane === 'flat'
+  const conductorView = lane === 'conductor'
+  /** Change the lane AND remember it. The ordinary path. */
+  const setLanePersisted = useCallback((next: SidebarLane) => {
+    setLane(next)
+    safeSetItem(SIDEBAR_LANE_LS_KEY, next)
+    // The legacy key is kept in step so a rollback to a build that only reads it
+    // lands the user in the same lane rather than a surprising one.
+    safeSetItem(FLAT_VIEW_LS_KEY, next === 'flat' ? '1' : '0')
   }, [])
+  /** Change the lane for THIS VISIT only, leaving the preference alone. Used by the
+   *  folder reveal, which has to leave a lane that renders no folder rows without
+   *  rewriting which lane the user opens the app in. */
+  const setLaneForVisit = useCallback((next: SidebarLane) => { setLane(next) }, [])
+  /** Back-compat shim for the reveal effect, which only ever turns flat view OFF. */
+  const setFlatView = useCallback((on: boolean) => {
+    if (!on) setLaneForVisit('tree')
+  }, [setLaneForVisit])
   const [activeFilters, setActiveFilters] = useState<Set<SessionFilterKey>>(() => {
     const initialFilters = new Set<SessionFilterKey>()
     for (const filterDef of SESSION_FILTERS) { if (localStorage.getItem(filterDef.storageKey) === '1') initialFilters.add(filterDef.key) }
@@ -5255,6 +5349,21 @@ function ChatSidebar({
   )
   const flatLaneActive = !boardLaneActive && flatView && folders.length > 0
 
+  /**
+   * Does any visible row actually have a creator that is also on screen?
+   *
+   * The conductor lane is only OFFERED when the answer is yes. A lane that renders
+   * exactly the flat list, with a chevron nowhere, is a dead position in the toggle
+   * cycle -- and the crew log can legitimately be off, in which case no row will ever
+   * carry a parent. Read off `filteredSlots`, the same list the lane renders, so the
+   * toggle never offers a lane the current filters have emptied of edges.
+   */
+  const lineageAvailable = useMemo(
+    () => filteredSlots.some(s => s.parent?.key != null || s.parent?.slot),
+    [filteredSlots],
+  )
+  const conductorLaneActive = !boardLaneActive && conductorView
+
   // Scroll memory for the session lane. Collapsing the sessions sidebar (or
   // closing the mobile drawer) UNMOUNTS ChatSidebar — OverlayDrawer gates its
   // children on `open` — so the lane remounted at the top and a user who had
@@ -5267,7 +5376,7 @@ function ChatSidebar({
   // and out of scope here. See useLaneScrollMemory.
   const laneScrollRef = useRef<HTMLDivElement | null>(null)
   const laneScrollMemory = useLaneScrollMemory(
-    boardLaneActive ? null : `chat-sidebar-lane:${flatLaneActive ? 'flat' : 'tree'}`,
+    boardLaneActive ? null : `chat-sidebar-lane:${conductorLaneActive ? 'conductor' : flatLaneActive ? 'flat' : 'tree'}`,
     laneScrollRef,
   )
 
@@ -5281,7 +5390,7 @@ function ChatSidebar({
       && (el.dataset.sessionScope ?? '') === pin.scope
       && el.closest('[inert]') === null)
     if (!live) releaseHoverPin()
-  }, [filteredSlots, boardLaneActive, flatLaneActive, orderedColumns, releaseHoverPin])
+  }, [filteredSlots, boardLaneActive, flatLaneActive, conductorLaneActive, orderedColumns, releaseHoverPin])
 
   // The folder filter goes inert while searching, in BOTH views: a query must
   // reach every match, so an unchecked folder can never become a search dead
@@ -5431,6 +5540,158 @@ function ChatSidebar({
       return !(fid && filterHiddenSubtree.has(fid))
     })
   }, [filteredSlots, folderFilterActive, filterHiddenSubtree, slotFolders])
+
+  // ── conductor lane ───────────────────────────────────────────────────────
+  //
+  // Nests each session under the session that OPENED it. A different axis from
+  // folders: a conductor and the workers it spawned are one unit of work wherever
+  // their folders put them, and today they scatter through a recency-sorted list.
+
+  /**
+   * The lineage tree over the rows this lane renders.
+   *
+   * Built from `flatSlots` -- the flat lane's own ordered list -- so root order AND
+   * sibling order are the flat lane's order, with no comparator of its own. A second
+   * comparator would make the two lanes disagree about the same two sessions for no
+   * reason a user could see.
+   *
+   * Only computed while the lane is active: cheap, but still per-render work for a
+   * view nobody is looking at.
+   */
+  const lineage = useMemo(() => {
+    if (!conductorLaneActive) return null
+    // The tree is keyed by `sessionRowIdentity`, not by raw slot key: this list mixes
+    // local rows with rows federated from a peer, and the two namespaces collide on
+    // deterministic keys. Keyed raw, one of a colliding pair replaces the other -- a
+    // session disappears and its twin renders twice.
+    //
+    // A citation needs the same care from the other direction. `parent.key` is a bare
+    // slot key in the key space of the CHILD's own gateway, so the creator is the row
+    // carrying that key with the SAME origin. Resolving through this index rather than
+    // composing the qualified form keeps that format the server's alone, and makes a
+    // peer row unable to nest under a local row whose key merely matches.
+    //
+    // Nested by origin rather than keyed on one joined string: there is then no
+    // separator, so no peer id or slot key containing it can be read as the wrong pair.
+    const byOrigin = new Map<string | undefined, Map<string, string>>()
+    for (const s of flatSlots) {
+      let inOrigin = byOrigin.get(s.peer_id)
+      if (inOrigin === undefined) {
+        inOrigin = new Map<string, string>()
+        byOrigin.set(s.peer_id, inOrigin)
+      }
+      inOrigin.set(s.key, sessionRowIdentity(s))
+    }
+    return buildLineage(flatSlots, {
+      identityOf: sessionRowIdentity,
+      parentIdentityOf: s => {
+        const cited = s.parent?.key
+        if (cited == null) return null
+        return byOrigin.get(s.peer_id)?.get(cited) ?? null
+      },
+    })
+  }, [conductorLaneActive, flatSlots])
+
+  /**
+   * Which conductor rows are open. COLLAPSED by default, and persisted.
+   *
+   * Collapsed is the default that makes the lane worth having: a conductor with
+   * fourteen workers should read as one row with a count, not as fifteen rows the
+   * user has to skim past. The set is keyed by row key and survives a reload, because
+   * a user who opened a conductor to watch its workers has not finished watching them.
+   */
+  const [conductorExpanded, setConductorExpanded] = useState<Set<string>>(readConductorExpanded)
+  const persistConductorExpanded = useCallback((next: Set<string>) => {
+    safeSetItem(CONDUCTOR_EXPANDED_LS_KEY, JSON.stringify(Array.from(next)))
+  }, [])
+  const toggleConductorExpanded = useCallback((key: string) => {
+    setConductorExpanded(prev => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      persistConductorExpanded(next)
+      return next
+    })
+  }, [persistConductorExpanded])
+
+  /**
+   * Open every ancestor of *key* so a nested row becomes visible.
+   *
+   * The conductor-lane counterpart of `expandFolderAncestors`, and needed for the same
+   * reason: revealing a row three levels down is pointless if the two rows above it
+   * are collapsed. Persisted like any other expand -- a reveal is a real navigation,
+   * not a peek.
+   *
+   * Reads the tree through a REF so this callback's identity never changes: it is a
+   * dependency of the reveal effect, and a new identity on every slots broadcast would
+   * re-run that effect continuously.
+   */
+  const lineageParentsRef = useRef<Map<string, string>>(new Map())
+  lineageParentsRef.current = lineage?.parentOf ?? lineageParentsRef.current
+  const expandConductorAncestors = useCallback((key: string) => {
+    setConductorExpanded(prev => {
+      const chain = ancestorsOf(key, lineageParentsRef.current)
+      if (chain.length === 0 || chain.every(k => prev.has(k))) return prev
+      const next = new Set(prev)
+      for (const k of chain) next.add(k)
+      persistConductorExpanded(next)
+      return next
+    })
+  }, [persistConductorExpanded])
+
+  /**
+   * The lanes that can actually render something, in cycle order.
+   *
+   * `tree` always can. `conductor` needs at least one edge -- the crew log can be off,
+   * and then no row will ever carry a parent, so the lane would be the flat list with
+   * a chevron nowhere. `flat` needs folders, which is the pre-existing rule. Offering
+   * a lane that renders identically to another is a dead position in the cycle, and the
+   * user has to press through it.
+   */
+  const availableLanes = useMemo<SidebarLane[]>(() => {
+    const out: SidebarLane[] = ['tree']
+    // Gated on the board too. `conductorLaneActive` is `!boardLaneActive && ...`, so
+    // with a board configured the lane cannot render and the press would change only
+    // the button's icon -- a position in the cycle that visibly does nothing. Flat is
+    // different and stays offered: it has a real in-column meaning.
+    if (lineageAvailable && !boardLaneActive) out.push('conductor')
+    if (folders.length > 0) out.push('flat')
+    return out
+  }, [lineageAvailable, boardLaneActive, folders.length])
+
+  /** Where the next press goes. The button's copy is derived from THIS rather than
+   *  from the current lane: the control's job is to say what it will do, and naming
+   *  the lane you are already in sends a screen-reader user somewhere else.
+   *
+   *  A persisted lane that is not available right now (its edges or folders went away)
+   *  reads as position -1, so the cycle starts from the top rather than stranding the
+   *  user on a press that appears to do nothing. */
+  const nextLane = useMemo<SidebarLane>(() => {
+    const at = availableLanes.indexOf(lane)
+    return availableLanes[(at + 1) % availableLanes.length]
+  }, [availableLanes, lane])
+
+  /** The toggle's tooltip and aria-label: what the next press DOES.
+   *
+   *  Recomputed per render rather than memoized on purpose -- the strings come from
+   *  `i18nT`, and a memo keyed on the lane alone would keep serving the previous
+   *  language's copy after a switch. */
+  const laneSwitchLabel = nextLane === 'conductor'
+    ? i18nT('pages.chatSidebar.switch_to_conductor_view_nested_by_creator')
+    : nextLane === 'flat'
+      ? (boardLaneActive
+        ? i18nT('pages.chatSidebar.switch_to_flat_view_hide_folders_in_board_columns')
+        : i18nT('pages.chatSidebar.switch_to_flat_view_all_chats_without_folders'))
+      : (boardLaneActive
+        ? i18nT('pages.chatSidebar.show_folders_in_board_columns')
+        : i18nT('pages.chatSidebar.switch_to_folder_view'))
+
+  /** The single header button: tree -> conductor -> flat -> tree, skipping any lane
+   *  that cannot render. Named for what it does now; there is no segmented control,
+   *  because the sidebar's chrome stays Raycast-plain. */
+  const cycleLane = useCallback(() => {
+    setLanePersisted(nextLane)
+  }, [nextLane, setLanePersisted])
 
   // The order the chat-jump/cycle shortcuts should follow — the rows AS
   // RENDERED, read back from the DOM after every commit. Reading the render
@@ -5918,6 +6179,17 @@ function ChatSidebar({
       setStaleExpanded(prev => (prev.has(container) ? prev : new Set(prev).add(container)))
     }
     if (slot.folder_id) expandFolderAncestors(slot.folder_id)
+    // Same need, the other axis: in the conductor lane the target may sit inside a
+    // collapsed conductor (and inside one collapsed inside another), and the retry
+    // loop below would scroll to a row that never rendered. Unconditional rather than
+    // gated on the lane being active -- a reveal arriving while the user is in the
+    // tree lane should leave the conductor lane already open at the right place for
+    // when they switch back, and for a row with no creator it is a no-op.
+    //
+    // Takes the ORIGIN-QUALIFIED identity for the same reason `runReveal` does below:
+    // the conductor tree is keyed that way, so a raw slot key would miss the row (or,
+    // on a collision, name the peer's).
+    expandConductorAncestors(sessionRowIdentity(slot))
     // Targeted by the `session` row marker (the ORIGIN-QUALIFIED identity), not
     // `data-slot-key`. Once peer rows are merged into this list the raw slot
     // key is no longer a unique namespace — a remote row with a byte-identical
@@ -5926,7 +6198,7 @@ function ChatSidebar({
     // session could scroll to the peer's row instead. `slot` above is resolved
     // from the LOCAL `slots` prop, so its identity is the right target.
     runReveal('session', key, sessionRowIdentity(slot))
-  }, [revealRequest, dispatch, localSlots, revealBlockingFilters, expandFolderAncestors, runReveal, isStaleExempt, slotFolders, staleCollapseMs, sortKey])
+  }, [revealRequest, dispatch, localSlots, revealBlockingFilters, expandFolderAncestors, expandConductorAncestors, runReveal, isStaleExempt, slotFolders, staleCollapseMs, sortKey])
   // ── Reveal a FOLDER row ───────────────────────────────────────────────────
   // The folder twin of the session reveal above, driven by the command launcher's
   // Folders group and the palette's Folders tab ("search a folder, land on it").
@@ -8080,29 +8352,54 @@ function ChatSidebar({
         clearLabel={i18nT('pages.chatSidebar.clear_search')}
         value={slotFilter}
         onChange={setSlotFilter}
-        trailingCount={folders.length > 0 ? 2 : 1}
+        trailingCount={availableLanes.length > 1 ? 2 : 1}
         trailing={(
           <>
-            {/* Flat-view toggle only makes sense when folders exist — without
-             *  them the list is already flat. */}
-            {folders.length > 0 && (
+            {/* ONE button cycling tree -> conductor -> flat, skipping any lane that
+             *  cannot render (see `availableLanes`). Deliberately not a segmented
+             *  control: the sidebar's chrome stays Raycast-plain, so the icon shows
+             *  the lane you are IN and the copy names where the next press goes.
+             *  Hidden entirely when only the tree is available, which is the
+             *  pre-existing "no folders, nothing to flatten" case. */}
+            {availableLanes.length > 1 && (
             <button
               type="button"
-              className={`relative w-6 h-6 rounded flex items-center justify-center cursor-pointer transition-colors border-none ${flatView ? 'text-accent bg-accent-subtle' : 'text-muted hover:text-text hover:bg-bg-hover bg-transparent'}`}
-              onClick={toggleFlatView}
-              /* With a board configured the toggle flattens INSIDE each column
-               * rather than producing the single flat lane, so the copy must
-               * not promise "all chats without folders" (one combined list). */
-              title={flatView
-                ? (boardLaneActive ? i18nT('pages.chatSidebar.show_folders_in_board_columns') : i18nT('pages.chatSidebar.back_to_folder_view'))
-                : (boardLaneActive ? i18nT('pages.chatSidebar.flat_view_hide_folders_in_board_columns') : i18nT('pages.chatSidebar.flat_view_all_chats_without_folders'))}
-              aria-label={flatView
-                ? (boardLaneActive ? i18nT('pages.chatSidebar.show_folders_in_board_columns') : i18nT('pages.chatSidebar.switch_to_folder_view'))
-                : (boardLaneActive ? i18nT('pages.chatSidebar.switch_to_flat_view_hide_folders_in_board_columns') : i18nT('pages.chatSidebar.switch_to_flat_view_all_chats_without_folders'))}
-              aria-pressed={flatView}
+              className={`relative w-6 h-6 rounded flex items-center justify-center cursor-pointer transition-colors border-none ${lane !== 'tree' ? 'text-accent bg-accent-subtle' : 'text-muted hover:text-text hover:bg-bg-hover bg-transparent'}`}
+              onClick={cycleLane}
+              /* Both strings describe the ACTION and are derived from `nextLane`, not
+               * from the lane in view: this is the feature's only entry point, so a
+               * label naming the current lane tells every user -- and every screen
+               * reader -- that the press goes somewhere it does not.
+               *
+               * With a board configured the toggle flattens INSIDE each column rather
+               * than producing the single flat lane, so the copy must not promise
+               * "all chats without folders" (one combined list). */
+              title={laneSwitchLabel}
+              aria-label={laneSwitchLabel}
+              /* NOT `aria-pressed`. This cycles three positions, and a boolean would
+               * announce the same "pressed" for conductor and for flat -- two different
+               * states told apart by nothing a screen reader hears. The lane in view is
+               * named instead, which is the fact a reader actually wants. */
+              data-lane={lane}
+              data-next-lane={nextLane}
               data-testid="flat-view-toggle"
             >
-              <List size={14} />
+              {/* Crossfaded rather than hard-swapped. One persistent button showing two
+                * different drawings on press reads as two different buttons -- a blind
+                * read of this control reported exactly that confusion -- and a short
+                * dissolve is what says "the same button changed" instead. */}
+              <AnimatePresence mode="wait" initial={false}>
+                <motion.span
+                  key={conductorView ? 'conductor' : 'list'}
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.12 }}
+                  className="flex items-center justify-center"
+                >
+                  {conductorView ? <ListTree size={14} /> : <List size={14} />}
+                </motion.span>
+              </AnimatePresence>
             </button>
             )}
             <DropdownMenu open={filterSortOpen} onOpenChange={setFilterSortOpen}>
@@ -8666,7 +8963,194 @@ function ChatSidebar({
             testId="instance-sessions-error"
           />
         )}
-        {flatLaneActive ? (
+        {conductorLaneActive ? (
+          // Conductor lane: every session nested under the session that OPENED it.
+          //
+          // The row is the EXISTING session card, unchanged — agent label, time,
+          // title, preview, PR chips, loop status, tags, needs-you. The lane adds
+          // three things and nothing else: indentation per depth, a chevron with a
+          // child count on a card that has children, and that subtree's aggregated
+          // badges while the card is collapsed. No compact row design: a nested
+          // session is the same object as a top-level one and reads the same.
+          //
+          // Search flattens it, the way the flat lane does: a query must reach every
+          // match, so a match three levels down inside a collapsed conductor cannot be
+          // hidden behind a chevron the user would have to guess at.
+          //
+          // DnD is off, like the flat lane's row order: position here is a function of
+          // who opened whom, so there is nothing a drop inside the lane could land on.
+          <motion.div ref={laneScrollRef} onScroll={laneScrollMemory.onScroll} layoutScroll={rowAnimEnabled} className={`${LIST_BODY_CLS} flex flex-col`} style={{ scrollbarWidth: 'none' }} data-testid="conductor-view-lane">
+            {folderCreateError && renderFolderCreateError(folderCreateError.folderId, folderCreateError.columnId)}
+            {(() => {
+              const tree = lineage
+              if (!tree) return null
+              const searching = slotFilter.trim() !== ''
+              // Keyed by identity, exactly as `lineage` is: a raw-key map would let a
+              // federated peer row overwrite the local row it collides with, so one
+              // session would vanish and the other would render twice.
+              const byKey = new Map(flatSlots.map(s => [sessionRowIdentity(s), s] as const))
+              const rows: Array<{ id: string; slot: Slot; depth: number; childCount: number; expanded: boolean; orphanOf: string | null; aggregate: { needsYou: number; running: number } | null }> = []
+
+              /** Does this row want the user? The same two signals the row itself
+               *  renders as a dot or a subtitle, so a collapsed conductor's badge and
+               *  its children's badges can never disagree. */
+              const wantsUser = (s: Slot) =>
+                !!(s.pending_approval || s.needs_input || (unreadSet.has(s.key) && !s.running))
+              const isRunning = (s: Slot) => !!(s.running || s.subagents_running)
+
+              const emit = (key: string, depth: number) => {
+                const slot = byKey.get(key)
+                if (!slot) return
+                const kids = tree.children.get(key) ?? []
+                const expanded = conductorExpanded.has(key)
+                const subtree = kids.length > 0 && !expanded
+                  ? descendantsOf(key, tree.children)
+                  : []
+                rows.push({
+                  id: key,
+                  slot,
+                  depth,
+                  childCount: kids.length,
+                  expanded,
+                  orphanOf: orphanCitation(slot, tree.parentOf.get(key) ?? null),
+                  // Only a COLLAPSED conductor aggregates: while it is open its
+                  // children show their own badges, and showing both would count the
+                  // same session twice on one screen.
+                  aggregate: subtree.length > 0
+                    ? {
+                      needsYou: subtree.filter(k => { const c = byKey.get(k); return c ? wantsUser(c) : false }).length,
+                      running: subtree.filter(k => { const c = byKey.get(k); return c ? isRunning(c) : false }).length,
+                    }
+                    : null,
+                })
+                if (!expanded) return
+                for (const kid of kids) emit(kid, depth + 1)
+              }
+
+              if (searching) {
+                // Flattened: every match at depth 0, in the lane's order, with no
+                // chevrons. Matches the flat lane's answer to the same question.
+                for (const s of flatSlots) {
+                  rows.push({ id: sessionRowIdentity(s), slot: s, depth: 0, childCount: 0, expanded: false, orphanOf: null, aggregate: null })
+                }
+              } else {
+                for (const key of tree.roots) emit(key, 0)
+              }
+
+              return rows.map((row, i) => {
+                const next = i < rows.length - 1 ? rows[i + 1] : null
+                const isActive = isActiveRow(row.slot)
+                const showDivider = next != null && !isActive && !isActiveRow(next.slot)
+                return (
+                  <Fragment key={row.id}>
+                    <div
+                      className="flex items-start"
+                      // Indentation is CAPPED. Depth is unbounded in principle -- a
+                      // conductor opening a conductor nests as far as the work does --
+                      // and at a 320px sidebar an uncapped ladder walks the card off
+                      // the right edge until the title is unreadable. Past the cap the
+                      // rows stop stepping right and the depth is shown as a number
+                      // instead, so the information survives without the geometry.
+                      style={{ paddingLeft: `${Math.min(row.depth, CONDUCTOR_MAX_INDENT_DEPTH) * 14}px` }}
+                      data-conductor-depth={row.depth}
+                      data-testid={row.depth > 0 ? 'conductor-nested-row' : undefined}
+                    >
+                      {row.childCount > 0 ? (
+                        <button
+                          type="button"
+                          className="mt-2.5 ml-1 w-4 h-4 shrink-0 rounded flex items-center justify-center border-none bg-transparent text-muted hover:text-text cursor-pointer"
+                          onClick={() => toggleConductorExpanded(row.id)}
+                          title={row.expanded
+                            ? i18nT('pages.chatSidebar.collapse_sessions_this_one_opened')
+                            : i18nT('pages.chatSidebar.expand_sessions_this_one_opened')}
+                          aria-label={row.expanded
+                            ? i18nT('pages.chatSidebar.collapse_sessions_this_one_opened')
+                            : i18nT('pages.chatSidebar.expand_sessions_this_one_opened')}
+                          aria-expanded={row.expanded}
+                          data-testid={`conductor-chevron-${row.id}`}
+                        >
+                          <DisclosureChevron open={row.expanded} size={12} />
+                        </button>
+                      ) : (
+                        // Keeps a childless row's card aligned with its siblings'
+                        // cards rather than shifted left by the missing chevron.
+                        <span className="mt-2.5 ml-1 w-4 h-4 shrink-0" aria-hidden="true" />
+                      )}
+                      <div className="min-w-0 flex-1">
+                        {renderSessionRow(row.slot, row.depth, showDivider, 'conductor', 'conductor', 'conductor')}
+                      </div>
+                      <div className="flex items-center gap-1 pt-2.5 pr-1 shrink-0">
+                        {row.depth > CONDUCTOR_MAX_INDENT_DEPTH && (
+                          // Past the indentation cap the rows stop stepping right, so
+                          // the depth is carried as a number rather than lost.
+                          <span
+                            className="text-[10px] text-muted tabular-nums"
+                            title={i18nT('pages.chatSidebar.nesting_depth', { depth: row.depth })}
+                            data-testid={`conductor-depth-${row.id}`}
+                          >{row.depth}</span>
+                        )}
+                        {row.orphanOf != null && (
+                          // The creator has closed, so this row is top-level and still
+                          // knows who opened it. Carried as an icon in the row's
+                          // EXISTING badge cluster, never as a line under the card: a
+                          // session row is one fixed-height card, and a stacked line
+                          // beneath it is what the session-row rule forbids. The
+                          // creator's name rides the tooltip.
+                          <span
+                            className="inline-flex items-center text-muted"
+                            title={i18nT('pages.chatSidebar.opened_by_closed_session', { slot: row.orphanOf })}
+                            data-orphan-of={row.orphanOf}
+                            data-testid={`conductor-orphan-${row.id}`}
+                          >
+                            <CornerDownRight
+                              size={11}
+                              className="lucide-inline"
+                              aria-label={i18nT('pages.chatSidebar.opened_by_closed_session', { slot: row.orphanOf })}
+                            />
+                          </span>
+                        )}
+                        {row.childCount > 0 && (
+                          <span
+                            className="text-[10px] text-muted tabular-nums"
+                            title={i18nT('pages.chatSidebar.sessions_this_one_opened')}
+                            data-testid={`conductor-child-count-${row.id}`}
+                          >{row.childCount}</span>
+                        )}
+                        {row.aggregate != null && row.aggregate.needsYou > 0 && (
+                          <span
+                            className="text-[10px] px-1 rounded bg-accent-subtle text-accent tabular-nums"
+                            title={i18nT('pages.chatSidebar.needs_your_answer')}
+                            data-testid={`conductor-needs-you-${row.id}`}
+                          >{row.aggregate.needsYou}</span>
+                        )}
+                        {row.aggregate != null && row.aggregate.running > 0 && (
+                          <span
+                            className="text-[10px] px-1 rounded bg-bg-hover text-muted tabular-nums"
+                            title={i18nT('pages.chatSidebar.running_session', { count: row.aggregate.running })}
+                            data-testid={`conductor-running-${row.id}`}
+                          >{row.aggregate.running}</span>
+                        )}
+                      </div>
+                    </div>
+                  </Fragment>
+                )
+              })
+            })()}
+            {flatSlots.length === 0 && (
+              <div className="px-3 py-4 text-[12px] text-muted">{i18nT('pages.chatSidebar.no_sessions_match')}</div>
+            )}
+            {flatSlots.length > 0 && lineage != null && lineage.children.size === 0 && (
+              // Not an error state: the crew log may be off, or nothing has opened
+              // anything yet. The lane still shows every session -- it just has no
+              // nesting to show, and says so instead of looking broken.
+              <div className="px-3 py-2 text-[11px] text-muted select-none" data-testid="conductor-lane-empty-note">
+                {i18nT('pages.chatSidebar.no_conductor_sessions_yet')}
+              </div>
+            )}
+            {renderHiddenReveal('conductor', allHiddenFolders, 0)}
+            {renderOlderSessionsHint('conductor')}
+          </motion.div>
+        ) : flatLaneActive ? (
           // Flat view: every chat exploded out of its folder into one lane.
           // Removes only the folder rendering hierarchy — sort, pin priority,
           // filters, and search all apply as usual (filteredSlots). No folder

@@ -1826,3 +1826,169 @@ def test_non_webapp_artifact_still_renders_its_content(monkeypatch, webapp_tree)
                         lambda: _webapp_store(webapp_tree, kind="html"), raising=False)
     monkeypatch.setattr(handlers, "_HAS_ARTIFACTS", True)
     assert handlers.resolve_webapp_public_dir("any-slug") is None
+
+
+# --- reaper precondition affordances (ruling F, #12816) --------------------
+#
+# The default TTL is 72 h and nothing in the page's setup guide installs the
+# reaper, so a first human confirm reliably lands on this 409. The payload has
+# to be enough for the dashboard to offer a way forward instead of just showing
+# the wall.
+
+
+def test_reaper_remediation_is_a_runnable_absolute_command(monkeypatch, tmp_path):
+    """The bare script name was not runnable: it is on nobody's PATH.
+
+    The path is also not a constant — installs rooted at ``~/.kirocrew`` and at
+    ``~/.kiro/crew`` both occur — so it is resolved from the live skills dir
+    rather than spelled out.
+    """
+    import kiro_crew.skills as skills_mod
+
+    fake_skills = tmp_path / "skills"
+    monkeypatch.setattr(skills_mod, "skills_dir", lambda: fake_skills)
+    cmd = handlers._reaper_remediation("myprofile", "us-west-2")
+    assert cmd.startswith(str(fake_skills))
+    assert cmd.endswith("--profile myprofile --region us-west-2")
+    assert "artifact-deploy/scripts/install-reaper.sh" in cmd.replace(os.sep, "/")
+
+
+def test_reaper_remediation_survives_an_unresolvable_skills_root(monkeypatch):
+    """Remediation text must never be what breaks the 409."""
+    import kiro_crew.skills as skills_mod
+
+    def boom():
+        raise RuntimeError("no skills root")
+
+    monkeypatch.setattr(skills_mod, "skills_dir", boom)
+    cmd = handlers._reaper_remediation("p", "r")
+    assert cmd == "install-reaper.sh --profile p --region r"
+
+
+def test_finite_ttl_without_base_stack_returns_a_keyed_409(monkeypatch, webapp_tree):
+    """The dashboard keys its two affordances off `code`, not the sentence."""
+    _set_profile(monkeypatch)
+    monkeypatch.setattr(handlers, "get_default_store",
+                        lambda: _webapp_store(webapp_tree), raising=False)
+    monkeypatch.setattr(handlers, "_HAS_ARTIFACTS", True)
+
+    def no_stacks(args, profile, timeout):
+        return 1, "", "does not exist"
+
+    monkeypatch.setattr(engine, "run_aws", no_stacks)
+    status, payload = _run(handlers._do_deploy(
+        {"site_id": "terrace", "artifact_slug": "terrace-app",
+         "confirm": True, "ttl_hours": 72}))
+    assert status == 409
+    assert payload["code"] == "reaper_required"
+    # The raw operator-facing sentence is preserved; the affordances are added
+    # beside it, not in place of it.
+    assert "kirocrew-deploy-base" in payload["error"]
+    assert payload["remediation"].endswith("--profile p --region us-west-2")
+
+
+def test_persistent_ttl_needs_no_reaper_stack(monkeypatch, webapp_tree):
+    """ttl_hours=0 is the escape the 409's first button re-runs with."""
+    _set_profile(monkeypatch)
+    monkeypatch.setattr(handlers, "get_default_store",
+                        lambda: _webapp_store(webapp_tree), raising=False)
+    monkeypatch.setattr(handlers, "_HAS_ARTIFACTS", True)
+
+    def no_stacks(args, profile, timeout):
+        return 1, "", "does not exist"
+
+    monkeypatch.setattr(engine, "run_aws", no_stacks)
+    monkeypatch.setattr(engine, "deploy", lambda sid, src, p, r: {
+        "site_id": sid, "url": "https://d/", "reused": False,
+        "bucket": "b", "distribution_id": "D", "status": "InProgress"})
+    status, payload = _run(handlers._do_deploy(
+        {"site_id": "terrace", "artifact_slug": "terrace-app",
+         "confirm": True, "ttl_hours": 0}))
+    assert status == 200
+    assert payload.get("code") != "reaper_required"
+
+
+def test_successful_deploy_backfills_the_fields_the_card_reads(monkeypatch, webapp_tree):
+    """A dashboard deploy must flip the card itself, with no agent involved.
+
+    The card's "not deployed" hero is keyed off deploy_target.public_url, so a
+    deploy that persisted only distribution_id succeeded while still advertising
+    the app as undeployed.
+    """
+    _set_profile(monkeypatch)
+    written: dict = {}
+
+    class _Store:
+        def get(self, _slug):
+            return SimpleNamespace(
+                kind="webapp",
+                content="app summary",
+                name="Terrace",
+                webapp_metadata=SimpleNamespace(
+                    app_dir=str(webapp_tree),
+                    deploy_target=SimpleNamespace(
+                        public_url="", profile="", region="", distribution_id=""),
+                    lifecycle=SimpleNamespace(
+                        status="draft", created_at="", expires_at=None,
+                        persistent=False, ttl_hours=72),
+                ),
+            )
+
+        def update(self, slug, **kwargs):
+            written["slug"] = slug
+            written["meta"] = kwargs.get("webapp_metadata")
+            written["event_type"] = kwargs.get("event_type")
+
+    monkeypatch.setattr(handlers, "get_default_store", lambda: _Store(), raising=False)
+    monkeypatch.setattr(handlers, "_HAS_ARTIFACTS", True)
+    monkeypatch.setattr(engine, "run_aws", lambda args, profile, timeout: (1, "", "no stack"))
+    monkeypatch.setattr(engine, "deploy", lambda sid, src, p, r: {
+        "site_id": sid, "url": "https://d111.cloudfront.net/", "reused": False,
+        "bucket": "b", "distribution_id": "DIST123", "status": "InProgress"})
+
+    status, _payload = _run(handlers._do_deploy(
+        {"site_id": "terrace", "artifact_slug": "terrace-app",
+         "confirm": True, "ttl_hours": 0}))
+    assert status == 200
+    meta = written["meta"]
+    assert meta.deploy_target.public_url == "https://d111.cloudfront.net/"
+    assert meta.deploy_target.distribution_id == "DIST123"
+    assert meta.deploy_target.profile == "p"
+    assert meta.lifecycle.status == "live"
+    # ttl_hours=0 is persistent, and this field's persistent value is None.
+    assert meta.lifecycle.persistent is True
+    assert meta.lifecycle.expires_at is None
+    assert written["event_type"] == "edited"
+
+
+def test_backfill_failure_does_not_fail_a_successful_deploy(monkeypatch, webapp_tree):
+    """The deploy already happened; a metadata write is not allowed to undo it."""
+    _set_profile(monkeypatch)
+
+    class _Store:
+        def get(self, _slug):
+            return SimpleNamespace(
+                kind="webapp", content="c", name="n",
+                webapp_metadata=SimpleNamespace(
+                    app_dir=str(webapp_tree),
+                    deploy_target=SimpleNamespace(
+                        public_url="", profile="", region="", distribution_id=""),
+                    lifecycle=SimpleNamespace(
+                        status="draft", created_at="", expires_at=None,
+                        persistent=False, ttl_hours=72)))
+
+        def update(self, *_a, **_k):
+            raise RuntimeError("store is read-only right now")
+
+    monkeypatch.setattr(handlers, "get_default_store", lambda: _Store(), raising=False)
+    monkeypatch.setattr(handlers, "_HAS_ARTIFACTS", True)
+    monkeypatch.setattr(engine, "run_aws", lambda args, profile, timeout: (1, "", "no stack"))
+    monkeypatch.setattr(engine, "deploy", lambda sid, src, p, r: {
+        "site_id": sid, "url": "https://d/", "reused": False,
+        "bucket": "b", "distribution_id": "D", "status": "InProgress"})
+
+    status, payload = _run(handlers._do_deploy(
+        {"site_id": "terrace", "artifact_slug": "terrace-app",
+         "confirm": True, "ttl_hours": 0}))
+    assert status == 200
+    assert payload["site_id"] == "terrace"

@@ -178,8 +178,24 @@ def _reaper_remediation(profile: str, region: str) -> str:
     Rendered with the request's real profile/region so the 409 payload is
     directly actionable. Installing the reaper is an operator step by design
     (the stack creates an IAM role, which KiroCrew never does itself).
+
+    The script is named by ABSOLUTE path, resolved from the live skills
+    directory. ``install-reaper.sh`` is not on anyone's PATH, so the bare name
+    this used to return was not a command the user could run — and the path is
+    not a constant either: an install rooted at ``~/.kirocrew`` and one rooted
+    at ``~/.kiro/crew`` both occur, so a hardcoded spelling is wrong on one of
+    them. Falls back to the bare name if the skills root cannot be resolved,
+    which is still no worse than before.
     """
-    parts = ["install-reaper.sh"]
+    script = "install-reaper.sh"
+    try:
+        from kiro_crew.skills import skills_dir
+
+        candidate = skills_dir() / "artifact-deploy" / "scripts" / "install-reaper.sh"
+        script = str(candidate)
+    except Exception:  # noqa: BLE001 — remediation text must never break the 409
+        pass
+    parts = [script]
     if profile:
         parts += ["--profile", profile]
     if region:
@@ -1096,12 +1112,18 @@ async def _do_deploy(params: dict[str, Any]) -> tuple[int, dict[str, Any]]:
             # Precondition failures render the EXACT operator command
             # with the request's real profile/region so remediation is
             # copy-paste, not archaeology.
+            #
+            # `code` is what the dashboard keys its two affordances off — deploy
+            # as persistent, or copy the install command. It reads the code
+            # rather than this sentence so the wording stays free to change
+            # without silently turning the buttons off.
             return 409, {
                 "error": (
                     "Finite-TTL deploys require the reaper base stack "
                     "(kirocrew-deploy-base). Use ttl_hours=0 for persistent "
                     "or install the reaper (install-reaper.sh)."
                 ),
+                "code": "reaper_required",
                 "remediation": _reaper_remediation(profile, region),
             }
 
@@ -1125,6 +1147,7 @@ async def _do_deploy(params: dict[str, Any]) -> tuple[int, dict[str, Any]]:
                         "(kirocrew-deploy-reaper). Install the reaper "
                         "(install-reaper.sh) or use ttl_hours=0 for persistent."
                     ),
+                    "code": "reaper_required",
                     "remediation": _reaper_remediation(profile, region),
                 }
 
@@ -1211,28 +1234,53 @@ async def _do_deploy(params: dict[str, Any]) -> tuple[int, dict[str, Any]]:
         if manifest_write_failed and ttl_hours == 0:
             result["warning"] = "TTL manifest upload failed (non-critical for persistent deploys)"
 
-        # Persist the strong-identity field into the artifact's
-        # webapp_metadata so teardown can cross-verify the manifest belongs
-        # to THIS deployment (slug alone is mutable/forgeable). Best-effort:
-        # a metadata write failure must not fail a successful deploy.
-        if artifact_slug and result.get("distribution_id"):
-            def _persist_dist_id() -> None:
+        # Persist the deployment into the artifact's webapp_metadata:
+        # `distribution_id` is the strong-identity field teardown cross-verifies
+        # the manifest against (slug alone is mutable/forgeable), and the
+        # public_url / lifecycle / profile fields are what flip the artifact card
+        # and the Deployments table out of "not deployed".
+        #
+        # This is done HERE rather than by the caller because every route that
+        # deploys an artifact needs it: the agent used to write these fields
+        # itself from chat, which left a dashboard-initiated deploy succeeding
+        # while its own card still advertised the app as undeployed. Server-side,
+        # the direct confirm and the pending confirm inherit it for free.
+        #
+        # Best-effort: a metadata write failure must not fail a successful deploy.
+        if artifact_slug and (result.get("distribution_id") or result.get("url")):
+            def _persist_deployment() -> None:
                 store = get_default_store()
                 art = store.get(artifact_slug)
                 meta = art.webapp_metadata
-                if meta is not None and meta.deploy_target is not None:
-                    meta.deploy_target.distribution_id = str(
-                        result.get("distribution_id", ""))[:128]
-                    # event_type must be in artifacts.ALLOWED_EVENT_TYPES --
-                    # "edited" is the metadata-update event; a custom name
-                    # would raise and silently skip persistence.
-                    store.update(artifact_slug, webapp_metadata=meta,
-                                 actor="deploy", event_type="edited")
+                if meta is None:
+                    return
+                if meta.deploy_target is not None:
+                    if result.get("distribution_id"):
+                        meta.deploy_target.distribution_id = str(
+                            result.get("distribution_id", ""))[:128]
+                    if result.get("url"):
+                        meta.deploy_target.public_url = str(result.get("url", ""))[:2048]
+                    if profile:
+                        meta.deploy_target.profile = profile[:128]
+                    if region:
+                        meta.deploy_target.region = region[:128]
+                if meta.lifecycle is not None:
+                    meta.lifecycle.status = "live"
+                    meta.lifecycle.created_at = now_iso
+                    meta.lifecycle.ttl_hours = ttl_hours
+                    meta.lifecycle.persistent = ttl_hours == 0
+                    # None, not "", is this field's documented persistent value.
+                    meta.lifecycle.expires_at = expires_iso or None
+                # event_type must be in artifacts.ALLOWED_EVENT_TYPES --
+                # "edited" is the metadata-update event; a custom name
+                # would raise and silently skip persistence.
+                store.update(artifact_slug, webapp_metadata=meta,
+                             actor="deploy", event_type="edited")
             try:
-                await asyncio.to_thread(_persist_dist_id)
+                await asyncio.to_thread(_persist_deployment)
             except Exception as e:  # noqa: BLE001 -- best-effort persistence
                 logger.warning(
-                    "could not persist distribution_id into artifact %s: %s",
+                    "could not persist deployment into artifact %s: %s",
                     artifact_slug, e)
 
         return 200, result

@@ -202,6 +202,19 @@ CANONICAL: dict[str, dict] = {
         "facts_omitted": [],
         "observed_at": 1789000002.5,
     },
+    "work/recorded": {
+        "slot": "dashboard:3",
+        "actor": "worker",
+        "by": "dashboard:9",
+        "action": "report",
+        "item_id": "it_0badc0de",
+        "status": "progress",
+        "summary": "scoped tests green, opening the PR next",
+        "artifacts": {"branch": "feat/x", "pr": "123"},
+        "pr": 123,
+        "event": "progress: scoped tests green",
+        "event_kind": "report",
+    },
 }
 
 
@@ -227,7 +240,10 @@ def test_every_type_written_today_is_declared_and_nothing_else_is():
     # had never declared -- four subagent/*, background/completed and plan/updated --
     # joined it. The first five stopped a fold outright; plan/updated was skipped
     # instead, which the class fold reads as damage.
-    assert len(SESSION_ENTRY_TYPES) == 29
+    #
+    # 29 after those six, and 30 once the work ledger's own ``work/recorded`` joined:
+    # a board's writes are entries in this log rather than a second record beside it.
+    assert len(SESSION_ENTRY_TYPES) == 30
     # Nine types the vocabulary owns that nothing writes. Declaring one would state
     # a shape no writer produces, and the first emitter to land would have to
     # satisfy a contract written without it. They pass through undeclared instead.
@@ -291,6 +307,15 @@ def test_only_a_vocabulary_the_writer_clamps_is_enforced():
         ("ledger/recorded", "event_kind"),
         ("object/observed", "producer"),
         ("plan/updated", "state"),
+        # The work ledger clamps every one of these before it builds the entry:
+        # the vocabularies are declared beside the type and the writer imports
+        # them, so the closed enum and the writer's refusal are one set.
+        ("work/recorded", "actor"),
+        ("work/recorded", "action"),
+        ("work/recorded", "state"),
+        ("work/recorded", "verdict"),
+        ("work/recorded", "status"),
+        ("work/recorded", "event_kind"),
     }
     emitted = set(_types_with_a_producing_site())
     assert {spec_type for spec_type, _ in closed} <= emitted

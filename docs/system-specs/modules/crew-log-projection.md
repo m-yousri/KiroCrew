@@ -14,10 +14,10 @@ frontend renders and pages and never folds. A client that folded the log would
 need the whole file to show one number.
 
 The five panel folds each read ONE session unit and are the set the growth push
-sends, so `PROJECTION_NAMES` holds those five. The `ledger` fold is keyed by a
+sends, so `PROJECTION_NAMES` holds those five. The `ledger` and `work` folds are keyed by a
 SLOT rather than by one unit: a slot owns one ACP session id at a time, so the
-work it accrues over its life is spread across a unit per id it ran under, and
-answering for it means joining them. `SLOT_PROJECTION_NAMES` holds `ledger` and
+session-ledger state is spread across a unit per id it ran under, while the work
+board also reaches the units of workers bound to that board. `SLOT_PROJECTION_NAMES` holds `ledger` and `work` and
 is kept OUT of `PROJECTION_NAMES` for that reason -- the growth push and the side
 panel address a session, and pushing a slot-wide value under one session's id
 would report a partial answer as the whole one. `FOLD_NAMES` is the union of the
@@ -168,42 +168,63 @@ and its one caller asks the registry for it by name.
 | `approvals` | Requests matched to decisions by `approval_id`: pending, decided, the decision tally, the last decision. No emitter writes these types yet; the fold is against the declared shape. |
 | `class` (INTERNAL -- not advertised, not pushed) | What KIND of session this log belongs to, over the log's WHOLE LIFE: the memory mode, the owning app, and whether the conversation was ever published to a channel. Each of those three is held at the most RESTRICTIVE value the log ever recorded, from the `class` object on the log's first `session/opened` plus every later `session/class` move, so a session published to a channel for one turn keeps reading as channel-published after the link is dropped -- that turn's content is still in this log. It also carries `workspace`, which folds differently because it is an IDENTITY rather than a restriction: there is no more-restrictive workspace to keep, so the FIRST one stated is held and a later different one sets `workspace_moved`, which is itself the restrictive fact -- a log whose content spans two workspaces is owned by neither. `recorded` says a class was stated at all and `complete` says the history has a beginning, and a reader deciding an authorization question refuses on either being false. The only fold whose consumer is a READER of another unit rather than a panel, which is why it is held restrictive rather than current: a fold that reported the present value would answer a question nobody asks of a log. |
 
-### The slot-keyed ledger fold
+### The slot-keyed folds
 
 | projection | what it answers |
 |---|---|
 | `ledger` | The session work ledger's state record: goal, phase, resumable next step, rejected approaches, artifact pointers, and a bounded event tail. It interprets only `ledger/recorded` and renders the ten fields every reader of that record expects (`session-work-ledger.md`). |
+| `work` | The conductor work board: its header, items, bindings, worker reports and bounded per-item event tails. It interprets only `work/recorded`; entries naming another board are excluded. |
 
-This fold is the module's ONE exception to FR-4, and it is stated rather than
-assumed, because a reader has to know which kind of fold it holds. A slot owns one
-ACP session id at a time rather than for its whole life, so the record it answers
-for is spread over a unit per id the slot ran under. `fold_slot_checkpoint` folds
-those units oldest first, RE-BASING the seq guard at each one: a seq is comparable
-only within one file, so the second unit's entries all sit at or below the first
-unit's seq, and `advance` would refuse the whole file as a re-fold. The state
-carries forward across the boundary while the seq restarts. `fold_slot` renders the
-result. The units it joins are still exactly one slot's own, so nothing reads across
-slots.
+These folds are the module's exceptions to FR-4. `SLOT_PROJECTION_NAMES`
+identifies them so a reader does not mistake a slot-wide value for one session
+unit's value. A slot owns one ACP session id at a time rather than for its whole
+life, so slot state is spread across the unit created for each id.
 
-`session_units_for_slot` supplies that list. It names the units whose HEADER can be
-PROVED to belong to the store holding it, ordered by the header's `createdAt` and
-then by unit id so a tie is stable -- which is the order the units were opened in,
-and therefore the order their entries happened in, so a later update wins over an
-earlier one. A caller that cannot tolerate a clock's ordering re-orders the list
-itself: the ledger's `crew_log_units` applies its own append-order log and drops the
-units a permanent delete excluded before folding, because a backward clock step
-would otherwise apply a retired session's goal over a later one's
-(`session-work-ledger.md`). `read_slot_projection` is the slot-keyed read, and
-`slot_of_session` resolves a session-addressed request to the slot recorded in that
-session's header: the header rather than a session mapping, because it is written
-once inside the fenced tree and cannot be made to name another conversation's slot.
+`fold_slot_checkpoint` folds the selected units in their supplied order and
+RE-BASES the seq guard at each unit boundary. A seq is comparable only within one
+file; state carries across the boundary while `last_seq` restarts from zero for
+the next unit. The returned `last_seq` belongs to the newest unit folded, and
+`fold_slot` renders that checkpoint.
+
+Unit selection is owned by the fold. `read_slot_projection` calls
+`_slot_units_for_fold` before folding. The `ledger` fold uses
+`session_ledger.crew_log_units`, whose append-order record precedes header-clock
+order and whose permanent-delete exclusions remove retired units. Other slot
+folds begin with `session_units_for_slot`, which admits only units whose headers
+prove their slot and orders them by `createdAt` and unit id.
+
+The `work` fold extends the conductor's own units with worker units discovered
+from recorded bindings. `_work_units` scans the conductor units for
+`work/recorded` entries whose action is `bind`, whose `slot` is the board being
+folded, and whose non-empty `worker_session_key` names a worker slot. Every unit
+proved for those worker slots is appended after the conductor units, with unit ids
+de-duplicated. `_work_step` filters every retained entry by the bound board slot,
+so a worker unit shared by several boards contributes only entries that name this
+board.
+
+`_Fold.bind_slot` is the optional fourth fold operation. The `work` fold registers
+`_work_bind_slot`, and `fold_slot_checkpoint` invokes it before the first entry.
+The board identity therefore comes from the reader's slot rather than from the
+first entry, which may be a nested conductor's report to its parent board. The
+`ledger` fold does not require a slot binding in its retained state.
+
+`also_slots` is a reader-supplied supplement to the fold-owned unit set. Each
+supplemental slot's proved units is appended after the owned units, with the same
+unit-id de-duplication. The work-ledger rebuild supplies cached worker bindings and
+slots whose own logs already carry entries naming the board; these sources recover
+a worker bound before the board's recorded `bind` entry existed. Supplemental
+slots never replace or reorder the fold-owned units.
+
+`slot_of_session` resolves a session-addressed request to the slot recorded in
+that session's header. The header is used instead of a session mapping because it
+is written once inside the fenced tree and cannot be rewritten to name another
+conversation's slot.
 
 A reader that folds on every loop wake would re-walk the whole log each time, since
 the fold interprets only its own entry type but still reads every line to find it.
-So the ledger's caller keeps the checkpoint per slot and advances it over what
-arrived since, through this module's own `advance`. A changed unit list, a newest
-unit whose seq went backwards, or a cold cache each force a full rebuild, because
-each would otherwise be a wrong answer rather than a slow one.
+The ledger caller therefore keeps a checkpoint per slot and advances it through
+this module's `advance`. A changed unit list, a newest unit whose seq moved
+backwards, or a cold cache forces a full rebuild.
 
 ## 4. Reads
 

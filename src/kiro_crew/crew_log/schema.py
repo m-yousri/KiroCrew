@@ -145,6 +145,11 @@ TYPE_OWNERSHIP: dict[str, frozenset[str]] = {
             # that made it is named on the entry, never inferred from prose.
             "object",
             "write",
+            # The conductor work board. Every work-ledger mutation appends one
+            # ``work/recorded`` entry to the acting session's log and every board
+            # reader folds those entries, so this domain is what makes the work
+            # ledger a projection of the crew log rather than a store beside it.
+            "work",
         }
     ),
 }

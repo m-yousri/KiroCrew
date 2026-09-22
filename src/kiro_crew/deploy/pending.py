@@ -26,7 +26,14 @@ from kiro_crew.platform_compat import file_lock
 logger = logging.getLogger(__name__)
 
 _MAX_PENDING = 20
-_EXPIRY_SECONDS = 3600  # 1 hour
+# A pending entry is the ONLY surface that can execute a previewed deploy, and
+# the human who has to click it may not be at the dashboard when the agent
+# writes it. At one hour the entry routinely expired before it was ever seen,
+# leaving the Deploy button with nothing to point at. A day spans an away-from-
+# desk gap without keeping a stale preview alive indefinitely; the content
+# digest and profile/region bindings are what stop a stale entry deploying the
+# wrong thing, not this window.
+_EXPIRY_SECONDS = 24 * 3600  # 24 hours
 
 
 def _store_path() -> Path:

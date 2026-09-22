@@ -547,6 +547,89 @@ def _stage_artifact_html(kind: str, content: str, name: str) -> tuple[list, str,
     return findings, tmp_dir, len(html.encode("utf-8"))
 
 
+class WebAppRootError(Exception):
+    """A kind=webapp artifact whose servable static root cannot be resolved."""
+
+
+def resolve_webapp_public_dir(slug: str) -> Path | None:
+    """Resolve + authorize a kind=webapp artifact's servable static root.
+
+    Returns None when the artifact is NOT kind=webapp — the caller then renders
+    its content as standalone HTML, the pre-existing behaviour for every other
+    kind. Raises :class:`WebAppRootError` when the artifact IS a webapp but has
+    no servable root, so a caller can report *why* instead of failing blankly.
+    Propagates the store's own not-found / invalid errors.
+
+    The root is REQUIRED to be ``app_dir/public``, the deploy contract's own
+    layout. ``app_dir`` itself is deliberately NOT a fallback: a directory that
+    merely happens to contain an ``index.html`` would otherwise be published
+    whole — sources, config JSON, dotfiles — and the destinations reached through
+    here are a world-readable CloudFront URL and the preview channel, so a
+    fallback would leak the app's source tree in both. ``app_dir`` is
+    LLM-written, so it is re-checked against the allow-listed roots here rather
+    than trusted from the metadata.
+
+    This is the ONE place that rule lives: the preview channel
+    (``dashboard/handlers/webapp_preview.py``) delegates here, so the two
+    surfaces cannot drift into disagreeing about what is servable.
+
+    Blocking (artifact store + filesystem) — call via ``asyncio.to_thread``.
+    """
+    if not _HAS_ARTIFACTS:
+        return None
+    art = get_default_store().get(slug)
+    meta = getattr(art, "webapp_metadata", None)
+    if art.kind != "webapp" or meta is None:
+        return None
+    raw = (getattr(meta, "app_dir", "") or "").strip()
+    if not raw:
+        raise WebAppRootError(
+            "this app artifact records no local directory (webapp_metadata.app_dir "
+            "is empty), so there is nothing to publish"
+        )
+    try:
+        app_dir = Path(os.path.expanduser(raw)).resolve()
+    except (OSError, ValueError):
+        # ValueError: embedded NUL in a crafted app_dir. The write path rejects
+        # control characters, but metadata predating that validation must fail
+        # closed here rather than raise OSError out of the handler.
+        raise WebAppRootError("this app artifact's recorded directory cannot be read") from None
+    if not app_dir.is_dir():
+        raise WebAppRootError("this app artifact's recorded directory no longer exists")
+    for root in _allowed_local_roots():
+        try:
+            app_dir.relative_to(root)
+            break
+        except ValueError:
+            continue
+    else:
+        raise WebAppRootError(
+            "this app artifact's directory is outside your home and workspace "
+            "directories, so it cannot be published"
+        )
+    public = app_dir / "public"
+    if not public.is_dir():
+        raise WebAppRootError(
+            "this app has no built public/ directory yet — only a built static "
+            "root can be published from here"
+        )
+    try:
+        resolved = public.resolve()
+        # `public` may itself be a symlink planted in a crafted app_dir tree.
+        # The resolved root must stay INSIDE the validated app_dir.
+        resolved.relative_to(app_dir)
+    except (OSError, ValueError):
+        raise WebAppRootError(
+            "this app's public/ directory resolves outside the app directory"
+        ) from None
+    if not (resolved / "index.html").is_file():
+        raise WebAppRootError(
+            "this app's public/ directory has no index.html, so a published link "
+            "would not resolve"
+        )
+    return resolved
+
+
 def _dir_contains_sensitive(src: Path, resolved: Path) -> bool:
     """Recursive sensitive-path walk. Blocking -- call via asyncio.to_thread."""
     if is_sensitive_path(str(src)) or is_sensitive_path(str(resolved)):
@@ -675,11 +758,29 @@ async def _do_deploy(params: dict[str, Any]) -> tuple[int, dict[str, Any]]:
     tmp_dir: str | None = None
     _staged_path: Path | None = None
     try:
+        # A kind=webapp artifact carries a real on-disk app tree, not deployable
+        # HTML, so it resolves to a static root and then travels the SAME route a
+        # local_dir deploy takes below. That route owns the staging snapshot, the
+        # symlink and sensitive-path refusals, the size guard and the content
+        # scan, and a webapp needs every one of them. None means "not a webapp":
+        # the artifact's own content is staged as standalone HTML, unchanged.
+        webapp_root: Path | None = None
         if artifact_slug:
             if local_dir:
                 return 400, {"error": "provide exactly one of artifact_slug or local_dir"}
             if not _HAS_ARTIFACTS:
                 return 500, {"error": "artifact store unavailable"}
+            try:
+                webapp_root = await asyncio.to_thread(
+                    resolve_webapp_public_dir, artifact_slug)
+            except ArtifactNotFoundError:
+                return 404, {"error": f"artifact '{artifact_slug}' not found"}
+            except WebAppRootError as e:
+                # A webapp whose root is not publishable: say WHICH precondition
+                # failed. The caller turns this into the "Deploy via agent"
+                # affordance rather than a dead button.
+                return 400, {"error": str(e), "code": "webapp_root_unavailable"}
+        if artifact_slug and webapp_root is None:
 
             def _resolve_artifact(slug: str) -> tuple[list["Finding"], str, int]:
                 """Blocking helper: store lookup + stage in one thread hop."""
@@ -696,12 +797,23 @@ async def _do_deploy(params: dict[str, Any]) -> tuple[int, dict[str, Any]]:
             tmp_dir = staged_dir
             src_dir = staged_dir
         else:
-            # Validate the LLM-influenceable path via a validation.py schema
-            # (type/length/charset) BEFORE any filesystem/subprocess use.
-            try:
-                local_dir = validate_field(local_dir, _LOCAL_DIR_SPEC)
-            except ValidationError as e:
-                return 400, {"error": f"invalid local_dir: {e}"}
+            # A webapp root is resolved SERVER-side from the artifact's own
+            # metadata and already confined to an allow-listed root, so it skips
+            # _LOCAL_DIR_SPEC's charset: that pattern is there to sanitize
+            # caller-supplied text, and applying it to a resolved project path
+            # would refuse a legitimate directory name containing '+' or
+            # non-ASCII characters. Every filesystem check below — normalization,
+            # absoluteness, containment, the sensitive-path walk, the staging
+            # snapshot and the scan — still runs on it unchanged.
+            if webapp_root is not None:
+                local_dir = str(webapp_root)
+            else:
+                # Validate the LLM-influenceable path via a validation.py schema
+                # (type/length/charset) BEFORE any filesystem/subprocess use.
+                try:
+                    local_dir = validate_field(local_dir, _LOCAL_DIR_SPEC)
+                except ValidationError as e:
+                    return 400, {"error": f"invalid local_dir: {e}"}
             # CodeQL path expression: string-level normalization barrier
             # BEFORE any Path construction — reject relative paths explicitly.
             local_dir_norm = os.path.normpath(os.path.expanduser(local_dir))

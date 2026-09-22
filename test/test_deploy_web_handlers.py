@@ -1692,3 +1692,137 @@ def test_scan_tree_real_binary_no_credentials_deploys_clean(tmp_path):
     findings, byte_size = handlers._scan_tree(src)
     cred_findings = [f for f in findings if f.severity == "credential"]
     assert len(cred_findings) == 0, f"Real binary should produce no credential findings: {findings}"
+
+
+# --- kind=webapp direct deploy (#12816) -----------------------------------
+#
+# A webapp artifact's content is an app SUMMARY, not deployable HTML, so it used
+# to be refused outright and the dashboard had nothing to click but a chat
+# hand-off. It now resolves to its built static root and deploys through the
+# same local_dir route, which is what carries the staging snapshot, the
+# sensitive-path walk and the scan.
+
+
+def _webapp_store(app_dir: Path, kind: str = "webapp"):
+    """A store whose single artifact is a webapp pointing at ``app_dir``."""
+    meta = SimpleNamespace(app_dir=str(app_dir))
+    art = SimpleNamespace(kind=kind, content="app summary", name="Terrace",
+                          webapp_metadata=meta)
+    return SimpleNamespace(get=lambda slug: art)
+
+
+@pytest.fixture
+def webapp_tree(tmp_path, monkeypatch):
+    """An allow-listed workspace holding one in-contract app tree.
+
+    ``public/`` is the built static root; ``src/`` is the app's own source,
+    which must never reach a public bucket.
+    """
+    ws = tmp_path / "workspace"
+    app_dir = ws / "terrace"
+    (app_dir / "public").mkdir(parents=True)
+    (app_dir / "public" / "index.html").write_text("<html>terrace</html>")
+    (app_dir / "src").mkdir()
+    (app_dir / "src" / "build.config.json").write_text('{"internal": "layout"}')
+    monkeypatch.setattr(handlers, "_allowed_local_roots", lambda: [ws.resolve()])
+    return app_dir
+
+
+def test_webapp_slug_previews_instead_of_being_refused(monkeypatch, webapp_tree):
+    """The confirm gate is reached, so the page has something to confirm."""
+    _set_profile(monkeypatch)
+    monkeypatch.setattr(handlers, "get_default_store",
+                        lambda: _webapp_store(webapp_tree), raising=False)
+    monkeypatch.setattr(handlers, "_HAS_ARTIFACTS", True)
+    status, payload = _run(handlers._do_deploy(
+        {"site_id": "terrace", "artifact_slug": "terrace-app"}))
+    assert status == 200
+    assert payload["requires_confirm"] is True
+    assert payload["scan"] == "clean"
+
+
+def test_webapp_deploy_publishes_only_the_built_public_root(monkeypatch, webapp_tree):
+    """The app's own source must not travel to a world-readable bucket.
+
+    This is the reason ``app_dir`` is not a fallback web root: publishing it
+    whole would upload build config and sources beside the built page.
+    """
+    _set_profile(monkeypatch)
+    monkeypatch.setattr(handlers, "get_default_store",
+                        lambda: _webapp_store(webapp_tree), raising=False)
+    monkeypatch.setattr(handlers, "_HAS_ARTIFACTS", True)
+    published: dict = {}
+
+    def fake_deploy(sid, src, p, r):
+        published["names"] = sorted(q.name for q in Path(src).rglob("*") if q.is_file())
+        return {"site_id": sid, "url": "https://d/", "reused": False,
+                "bucket": "b", "distribution_id": "D", "status": "InProgress"}
+
+    monkeypatch.setattr(engine, "deploy", fake_deploy)
+    status, _payload = _run(handlers._do_deploy(
+        {"site_id": "terrace", "artifact_slug": "terrace-app",
+         "confirm": True, "ttl_hours": 0}))
+    assert status == 200
+    assert published["names"] == ["index.html"]
+
+
+def test_webapp_without_built_public_dir_is_refused_with_a_reason(monkeypatch, tmp_path):
+    """No built root yet: a named precondition, not a blank failure.
+
+    The dashboard turns this into the "Deploy via agent" affordance, so the
+    reason has to say which precondition failed.
+    """
+    _set_profile(monkeypatch)
+    ws = tmp_path / "workspace"
+    app_dir = ws / "unbuilt"
+    app_dir.mkdir(parents=True)
+    (app_dir / "index.html").write_text("<html>loose</html>")
+    monkeypatch.setattr(handlers, "_allowed_local_roots", lambda: [ws.resolve()])
+    monkeypatch.setattr(handlers, "get_default_store",
+                        lambda: _webapp_store(app_dir), raising=False)
+    monkeypatch.setattr(handlers, "_HAS_ARTIFACTS", True)
+    status, payload = _run(handlers._do_deploy(
+        {"site_id": "unbuilt", "artifact_slug": "unbuilt-app"}))
+    assert status == 400
+    assert payload["code"] == "webapp_root_unavailable"
+    assert "public/" in payload["error"]
+
+
+def test_webapp_app_dir_outside_allowed_roots_is_refused(monkeypatch, tmp_path):
+    """An app_dir is LLM-written, so containment is re-checked at deploy time."""
+    _set_profile(monkeypatch)
+    outside = tmp_path / "elsewhere" / "app"
+    (outside / "public").mkdir(parents=True)
+    (outside / "public" / "index.html").write_text("<html>x</html>")
+    monkeypatch.setattr(handlers, "_allowed_local_roots",
+                        lambda: [(tmp_path / "workspace").resolve()])
+    monkeypatch.setattr(handlers, "get_default_store",
+                        lambda: _webapp_store(outside), raising=False)
+    monkeypatch.setattr(handlers, "_HAS_ARTIFACTS", True)
+    status, payload = _run(handlers._do_deploy(
+        {"site_id": "x", "artifact_slug": "x-app"}))
+    assert status == 400
+    assert payload["code"] == "webapp_root_unavailable"
+
+
+def test_webapp_with_empty_app_dir_is_refused_with_a_reason(monkeypatch):
+    _set_profile(monkeypatch)
+    monkeypatch.setattr(handlers, "get_default_store",
+                        lambda: _webapp_store(Path("")), raising=False)
+    monkeypatch.setattr(handlers, "_HAS_ARTIFACTS", True)
+    status, payload = _run(handlers._do_deploy(
+        {"site_id": "x", "artifact_slug": "x-app"}))
+    assert status == 400
+    assert payload["code"] == "webapp_root_unavailable"
+
+
+def test_non_webapp_artifact_still_renders_its_content(monkeypatch, webapp_tree):
+    """Regression guard: only kind=webapp takes the new route.
+
+    Every other kind keeps staging its own content as standalone HTML, so the
+    resolver answers None rather than claiming the artifact has a static root.
+    """
+    monkeypatch.setattr(handlers, "get_default_store",
+                        lambda: _webapp_store(webapp_tree, kind="html"), raising=False)
+    monkeypatch.setattr(handlers, "_HAS_ARTIFACTS", True)
+    assert handlers.resolve_webapp_public_dir("any-slug") is None

@@ -528,7 +528,8 @@ def schemas() -> list[dict[str, Any]]:
                 "Preview a deploy of a webapp artifact or local directory to a "
                 "public URL on the user's AWS account. This tool is PREVIEW-ONLY: "
                 "it returns scan status and deploy details but never executes. "
-                "Final confirmation happens in the dashboard Artifact Deploy page. "
+                "Final confirmation happens in the dashboard at Artifacts -> "
+                "Artifact Deploy (/deploy) -> Pending confirmations. "
                 "Restricted-session guard and SEL audit apply identically to the "
                 "HTTP endpoint."
             ),
@@ -1201,8 +1202,9 @@ def deploy_artifact(name: str, args: dict[str, Any]) -> str:
             f"Deploy blocked by scan ({d.get('count', '?')} non-credential "
             f"finding(s)):\n{findings}\n\n"
             f"These findings are overridable by a HUMAN: the deploy now "
-            f"appears under \"Pending confirmations\" on the Artifact "
-            f"Deploy page, where the user can review the findings and "
+            f"appears under \"Pending confirmations\" in the dashboard at "
+            f"Artifacts -> Artifact Deploy (/deploy), where the user can "
+            f"review the findings and "
             f"explicitly deploy anyway (or dismiss).\n"
             f"\nWARNING: Anyone with the published link can view this content. "
             f"It is served on the public internet with no authentication. Relay "
@@ -1235,8 +1237,9 @@ def deploy_artifact(name: str, args: dict[str, Any]) -> str:
         f"\nWARNING: Anyone with the published link can view this content. "
         f"It is served on the public internet with no authentication. Relay "
         f"this warning to the user before they confirm.\n"
-        f"\nThis deploy now appears under \"Pending confirmations\" on the "
-        f"Artifact Deploy page in the dashboard. Open it to confirm or dismiss."
+        f"\nThis deploy now appears under \"Pending confirmations\" in the "
+        f"dashboard: Artifacts -> Artifact Deploy (/deploy) -> Pending "
+        f"confirmations. Open it there to confirm or dismiss."
     )
 
 

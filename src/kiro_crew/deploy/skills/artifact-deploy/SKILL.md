@@ -6,14 +6,14 @@ triggers: deploy, ship, publish demo, public link, deploy to aws, share external
 
 # KiroCrew One-Click Deploy (MVP)
 
-> **Shipped by the Artifact Deploy app** (`apps/builtins/deploy_web/`). Installing
-> the app activates this skill -- that's how the fullstack deploy capability is
-> distributed. The app page (sidebar -> Artifact Deploy) owns AWS profile setup,
-> verification, and the fleet/cost view; this skill is the deploy action.
+> **Part of core** (`src/kiro_crew/deploy/`) -- nothing to install. The
+> **Artifact Deploy** page owns AWS profile setup, verification, and the
+> fleet/cost view; this skill is the deploy action. Reach the page at `/deploy`,
+> from the globe button at the top right of the Artifacts page.
 
-## AWS config -- resolve the profile from the app's registry, don't ask
+## AWS config -- resolve the profile from the registry, don't ask
 
-The Artifact Deploy app owns the AWS configuration as a **multi-profile
+Artifact Deploy owns the AWS configuration as a **multi-profile
 registry** at `~/.kiro/crew/deploy/profiles.json`
 (`{"profiles": [{"name", "region", ...}], "default": "<name>"}`). Resolve the
 deploy profile in this order, **before asking the user anything**:
@@ -21,23 +21,24 @@ deploy profile in this order, **before asking the user anything**:
 1. **User picked one**: if the deploy request names a profile (the artifact
    card's dropdown injects `Use the AWS profile "<name>".`), use that entry's
    `name`/`region` from the registry. If the name is not in the registry, stop
-   and send the user to the app page to register it -- never deploy with an
+   and send the user to Artifact Deploy to register it -- never deploy with an
    unregistered profile name.
 2. **Registry default**: otherwise use the entry named by `default`.
 3. **Legacy fallback**: if `profiles.json` doesn't exist, read the old
    `~/.kiro/crew/deploy/config.json (legacy: ~/.kiro/crew/apps/deploy-web/data/config.json)` (`{"profile", "region"}`).
 4. **Unconfigured** (no registry, no legacy profile): do NOT walk the user
-   through manual profile setup in chat -- link them to the app page
-  (sidebar -> Artifact Deploy), which has the Profiles control plane (register /
+   through manual profile setup in chat -- link them to **Artifact Deploy**
+  (`/deploy`, from the globe button at the top right of the Artifacts page),
+  which has the Profiles control plane (register /
   create + Verify access + IAM policy generator). Resume once a profile exists.
 
 After a successful deploy, back-fill `webapp_metadata.deploy_target.profile`
 with the profile NAME actually used, so the fleet table and the artifact's
 control card show which identity owns the deployment.
 
-This replaces the old "pick the AWS profile" step: profiles are managed once in
-the app, then every deploy (static publish or fullstack webapp) reuses them.
-Optionally confirm reachability via the app's verify endpoint
+This replaces the old "pick the AWS profile" step: profiles are managed once on
+the Artifact Deploy page, then every deploy (static publish or fullstack webapp)
+reuses them. Optionally confirm reachability via the verify endpoint
 (`POST /api/deploy/verify` with `{"profile": "<name>"}` -- an STS
 read, no credential access).
 
@@ -170,8 +171,8 @@ not *rewrites business logic*.
   Windows is not supported; use WSL (Windows Subsystem for Linux) to run the
   KiroCrew gateway if your host OS is Windows. The backend returns HTTP 400
   with a clear message on unsupported platforms.
-- AWS access configured **once in the Artifact Deploy app** (profiles registered
-  in `~/.kiro/crew/deploy/profiles.json`, verified via the app page).
+- AWS access configured **once on the Artifact Deploy page** (profiles registered
+  in `~/.kiro/crew/deploy/profiles.json`, verified there).
   Prefer a **least-privilege deploy profile**, not admin (see Security).
 - The app is conformed to the **deploy contract** (above) — producing that
   layout is the skill's job (Greenfield: generate in-contract; Brownfield: run

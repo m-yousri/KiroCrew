@@ -171,7 +171,10 @@ class TestHelpers:
         assert handlers._safe_resolve(boom) is boom
 
     def test_reaper_remediation_omits_empty_flags(self):
-        assert handlers._reaper_remediation("", "") == "install-reaper.sh"
+        # Absolute path now, so the command is actually runnable; the flag
+        # behaviour this pins is unchanged.
+        assert handlers._reaper_remediation("", "").endswith("install-reaper.sh")
+        assert "--profile" not in handlers._reaper_remediation("", "")
         assert "--profile p" in handlers._reaper_remediation("p", "us-west-2")
 
     def test_safe_site_id_strips_and_truncates(self):
@@ -579,7 +582,7 @@ class TestDoDeployRefusals:
         status, payload = await handlers._do_deploy(
             {"site_id": "s", "local_dir": str(_site), "confirm": True})
         assert status == 409
-        assert payload["remediation"].startswith("install-reaper.sh")
+        assert payload["remediation"].endswith("install-reaper.sh --profile p --region us-west-2")
 
     @pytest.mark.asyncio
     async def test_base_stack_parse_error_is_swallowed(self, _site, monkeypatch):

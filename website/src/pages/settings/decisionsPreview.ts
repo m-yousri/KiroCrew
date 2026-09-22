@@ -68,9 +68,25 @@ export const DECISIONS_COMPACTION_POINT = 'compaction.keep'
 export const DECISIONS_MEMORY_POINT = 'memory.recall'
 
 /**
- * Config path of the sampling share. One of the four `decisions.*` values the
- * config PATCH accepts, beside the three `model_route` tiers; the address and the
- * credential are deliberately not among them.
+ * The point that screens an auto-nudge tick before it wakes the session that armed
+ * the loop.
+ *
+ * Named here beside the others because the cross-layer guard requires it: a point
+ * is an egress path, so some surface has to be able to say what was sent for it.
+ *
+ * The one point with TWO providers. Its own `decisions.nudge_wake.provider` chooses
+ * between Jev, which this card's consent switch covers, and a small text-only model
+ * on the provider the machine already uses, which needs no extra key and no second
+ * endpoint consent. Either way the judge only decides whether a turn is spent: every
+ * failure, timeout and refused answer fires the tick exactly as the plain timer
+ * would, so the setting can remove turns and never silence a loop.
+ */
+export const DECISIONS_NUDGE_WAKE_POINT = 'nudge.wake'
+
+/**
+ * Config path of the sampling share. One of the six `decisions.*` values the config
+ * PATCH accepts, beside the three `model_route` tiers and the two `nudge_wake` keys;
+ * the address and the credential are deliberately not among them.
  */
 export const DECISIONS_BUCKET_PATH = 'decisions.bucket'
 

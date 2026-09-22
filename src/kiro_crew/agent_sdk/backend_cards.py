@@ -16,11 +16,12 @@ A card line is AVAILABLE or NOT AVAILABLE, and that is the honest ceiling. A
 ``frozenset`` carries one bit -- in, or out -- so three states a graded card would
 want to tell apart are indistinguishable in the source data: cannot do it, does it
 differently, and nobody has measured it. ``ACP_BACKENDS_MEMBER_DISPATCH`` is the
-case that proves it: codex is a non-member because, in the set's own words, "what
-is missing is a DECISION, not a mechanism", while opencode is a non-member on the
-same words and KAS is a member on a captured mount. A projection cannot tell a
-deliberate no from an unmeasured one, so a graded level would have to be authored
-per harness per capability -- the per-harness prose this projection exists to
+case that proves it: pi is a non-member because a mount there is INERT (the array is
+accepted and never forwarded), deepseek is a non-member on a deliberate refusal --
+it has the mount, and its routing is outside ``tool_gate.ENFORCED_ROUTINGS`` -- and
+KAS is a member on a captured mount. A projection cannot tell "cannot" from
+"declined" from "unmeasured", so a graded level would have to be authored per
+harness per capability -- the per-harness prose this projection exists to
 remove.
 
 The ONE fact that is genuinely graded already carries its own grade:

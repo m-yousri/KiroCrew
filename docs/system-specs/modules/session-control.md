@@ -491,7 +491,7 @@ itself opened. Member sessions also bypass the provider warm pool
 default backend, so a warm hit would skip both the member backend route and
 the mount. The member backend is `agent.member_acp_backend` (default `kas`),
 and requires a wire-capable backend (`ACP_BACKENDS_MEMBER_DISPATCH`: the
-claude seam, KAS and codex); kiro-cli v2 reads its template from disk and
+claude seam, KAS, codex and opencode); kiro-cli v2 reads its template from disk and
 exposes no per-session channel, so a member session on it runs as plain chat —
 the tools are simply not mounted, never mounted-and-refused. The mount's
 precondition is asked of the BACKEND
@@ -500,7 +500,28 @@ off one harness's flag. A harness whose routing this core enforces needs
 nothing further: `tool_gate.is_enforced` is true for codex because its routing
 is `SESSION_CONFIG`, a member of `ENFORCED_ROUTINGS`, so
 `_apply_session_permission_routing` refuses the session outright when
-`mode=read-only` cannot be armed. Claude's routing is `SEEDED_SETTINGS`, which
+`mode=read-only` cannot be armed. It is true for opencode as well, on
+`VERIFIED_SEEDED_SETTINGS`: the value is seeded into the child's environment and
+READ BACK from the harness's own config resolution before the first prompt, so a
+session that cannot establish the asking posture is refused too — and
+`providers/mirrors/opencode.py` documents `permission_surface_owned` as
+accepted-and-ignored for exactly that reason. One further precondition binds only
+where withholding a server is the whole of a backend's per-tool deny channel
+(`mirrors.registry.PerToolDeny.WHOLE_SERVER`, opencode today): if the operator has
+switched off a tool of `kirocrew-dashboard`, the projection withholds that server and
+the member append must not re-add it, so the thread runs as plain chat rather than
+reaching the switched-off tool. codex and claude keep the mount there — codex refuses
+the call at permission time and claude's deny rules refuse it inside the adapter.
+Switching that server off WHOLE (`disabled`) withholds the mount with no backend
+condition at all: the form has no per-call spelling, so no harness can refuse a call to
+a server it was handed, and the `tools` allowlist that keeps a disabled server out of
+the spec-described half of the array does not reach an element the client appends
+itself (`session_mcp.session_mcp_disabled_servers`). Both composers ask it: `AcpClient` reads the
+projection's `disabled_servers` (opencode, claude), and `AcpRuntime` asks
+`session_mcp_server_is_disabled` on its create and resume paths (codex, KAS) — through
+the reader rather than a projection field because KAS has no mirror to carry one. The
+resume half matters on its own, since `session/load` re-initializes the session's
+servers and would otherwise re-mount what `session/new` withheld. Claude's routing is `SEEDED_SETTINGS`, which
 this core declares and does not enforce, which is why claude must instead OWN
 the `settings.local.json` that decides whether a call asks
 (`_claude_settings_authored`) and its mount waits on that file. Both halves of

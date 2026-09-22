@@ -980,6 +980,130 @@ async def api_member_activity(request: web.Request) -> web.Response:
     )
 
 
+async def api_member_briefing(request: web.Request) -> web.Response:
+    """GET /api/members/{slug}/briefing?member=<name> — a crewmate's own notes, read-only.
+
+    Feeds the Crewmates page panel's Notes tab. The briefing
+    (``members/<slug>/briefing.md``) is the crewmate's self-maintained standing
+    notes — an AGENT-written file, curated by the crewmate for its future self.
+    This endpoint is the read half only and never writes: a human who wants to
+    edit the notes opens the returned ``path`` in the dashboard file viewer,
+    which goes through ``/api/file-read`` and its own path policy, so ``path``
+    here is a pointer, not a read.
+
+    The text comes from :func:`members.read_member_briefing` and inherits its
+    total contract: a missing or unreadable file reads as ``""`` (the normal
+    state of a fresh crewmate — never a 404), and content past
+    ``MEMBER_BRIEFING_MAX_CHARS`` is cut at the cap with a visible marker,
+    which the panel renders as-is so the human sees the same overflow the
+    crewmate is shown. ``supported`` is :func:`members.member_briefing_supported`:
+    on platforms without ``O_NOFOLLOW`` and the pinned ancestor walk the read
+    fails closed to ``""`` and the panel explains that from the flag rather
+    than presenting an empty briefing as "no notes yet". ``updated_ts`` is the
+    file's own mtime (epoch seconds) or ``null`` when there is no file.
+
+    ``member`` (query, REQUIRED) is the exact crew name, same posture as the
+    activity endpoint: slugification is lossy, and the exact name is echoed
+    back so the frontend keys its cache by name rather than by a slug two
+    crewmates can share -- and, as on the rules endpoint, the exact name must
+    derive this slug, exist, and be the ONLY crew that derives it: the briefing
+    is one file per slug, so for a colliding slug the notes belong to neither
+    crewmate and the read is refused (409 ``briefing_slug_ambiguous``) rather
+    than shown -- with an Edit -- as one of theirs.
+    """
+    denied = await _deny_app_caller(request, "members.briefing")
+    if denied is not None:
+        return denied
+    slug = request.match_info["slug"]
+    try:
+        members_mod.validate_slug(slug)
+    except MemberSlugError:
+        return web.json_response(
+            {"error": "invalid member slug", "code": "invalid_member_slug"}, status=400
+        )
+    member = request.query.get("member", "")
+    if not member or not _AGENT_NAME_RE.match(member):
+        return web.json_response(
+            {"error": "member query parameter required", "code": "missing_member"}, status=400
+        )
+    # The briefing is a PER-SLUG file and the slug is lossy (`Code_Reviewer` and
+    # `code-reviewer` share one), so for a colliding slug the file belongs to
+    # neither crewmate cleanly: showing it as one member's notes -- with an Edit
+    # that saves over it -- would let the two overwrite each other. Same posture
+    # as the rules endpoint: verify the exact member derives this slug, exists,
+    # and is the ONLY one that does; otherwise refuse with a coded answer the
+    # panel turns into a plain sentence. Config read off-loop (file IO).
+    cfg = await asyncio.to_thread(KiroCrewConfig.load)
+    try:
+        if members_mod.member_slug(member, cfg) != slug:
+            return web.json_response(
+                {"error": "member does not match slug", "code": "member_slug_mismatch"}, status=400
+            )
+    except MemberSlugError:
+        return web.json_response(
+            {"error": "member does not match slug", "code": "member_slug_mismatch"}, status=400
+        )
+    if member not in cfg.agents:
+        return web.json_response(
+            {"error": "no crew member for this slug", "code": "member_not_found"}, status=404
+        )
+    if _member_names_for_slug(cfg, slug) != [member]:
+        return web.json_response(
+            {
+                "error": "multiple crews share this slug; their notes would be ambiguous",
+                "code": "briefing_slug_ambiguous",
+            },
+            status=409,
+        )
+
+    supported = members_mod.member_briefing_supported()
+
+    # One off-loop hop for every blocking step: the text (a pinned, bounded
+    # open), the mtime (an lstat) and the pointer the Edit button opens. Three
+    # ``to_thread`` calls would pay the thread handoff thrice for a set that
+    # always travels together -- and ``member_briefing_path`` resolves the
+    # members root, which is filesystem IO that must not run on the loop.
+    #
+    # The pointer is the LEXICAL location ``members/<slug>/briefing.md`` under
+    # the members root, never the resolved one: ``member_dir`` follows a
+    # symlinked ``members/<slug>`` to wherever it points (a peer's directory
+    # still passes its containment check), so a resolved pointer would send an
+    # Edit into the peer's notes while the pinned read above had already
+    # refused that same link. The lexical path names what the read names;
+    # the file viewer applies its own path policy when it opens it.
+    def _read_briefing() -> tuple[str, float | None, str]:
+        text = members_mod.read_member_briefing(slug)
+        updated_ts = members_mod.member_briefing_updated_ts(slug)
+        try:
+            path = str(members_mod.members_root() / slug / members_mod.BRIEFING_FILE_NAME)
+        except (OSError, RuntimeError):
+            # Only a data-home resolution failure lands here (the slug is
+            # already validated); the panel then has no file to open.
+            path = ""
+        return text, updated_ts, path
+
+    text, updated_ts, path = await asyncio.to_thread(_read_briefing)
+
+    # Same redaction chain as the activity endpoint: the briefing is an
+    # AGENT-written file, so a token the crewmate pasted into its own notes
+    # would otherwise cross this network boundary into the browser verbatim.
+    # Run on the FULL (already capped) text so the cap cannot split a token
+    # past the patterns.
+    text, _ = _h.redact_exfiltration_urls(text)
+    text, _ = _h.redact_credentials(text)
+
+    return web.json_response(
+        {
+            "slug": slug,
+            "member": member,
+            "supported": supported,
+            "text": text,
+            "updated_ts": updated_ts,
+            "path": path,
+        }
+    )
+
+
 async def api_member_rules_get(request: web.Request) -> web.Response:
     """GET /api/members/{slug}/rules?member=<name> — user-owned permanent rules.
 

@@ -3800,6 +3800,24 @@ export const api = {
     fetch(
       '/api/members/' + encodeURIComponent(slug) + '/panel?member=' + encodeURIComponent(member),
     ).then(j) as Promise<{ panel: CrewPanelMeta | null; html: string | null }>,
+  // The crewmate's self-maintained briefing markdown. Read-only from the UI:
+  // the Edit button opens it in the file viewer, where it can be edited like
+  // any other file. `member` is the exact crew name (slugs are lossy).
+  memberBriefing: (slug: string, member: string) =>
+    fetch(
+      '/api/members/' + encodeURIComponent(slug) + '/briefing?member=' + encodeURIComponent(member),
+    ).then(j) as Promise<{
+      slug: string
+      member: string
+      /** Whether the platform can read the file safely (false on Windows). */
+      supported: boolean
+      /** Markdown content, or empty string when the crewmate has not written notes yet. */
+      text: string
+      /** Last-modified timestamp, or null when no notes file exists yet. */
+      updated_ts: number | null
+      /** Filesystem path, for the Edit button to open. Empty when no file. */
+      path: string
+    }>,
   updateKirocrewAgent: (name: string, body: object) =>
     put('/api/agents/' + encodeURIComponent(name), body).then(j),
   deleteKirocrewAgent: (name: string) =>

@@ -660,7 +660,7 @@ A provider-side template switch changes persona behavior without selecting a
 new memory owner. Ordinary owner/app, capability, native-history and governance
 checks still apply to selection changes; see [session](session.md#agent-selection-provenance).
 
-The member side panel's Crew summary tab and the editor link to
+The crew editor links to
 `/settings/overview?view=memory&store=<name>`. The member memory workspace has
 Memories, Profile and Recovery tabs: browsing/search/correction/copy stay in
 Memories, preferences and project anchors stay in Profile, and backups plus
@@ -688,8 +688,8 @@ store read, and a link to another session remains a conflict.
 
 The member's presence indicator includes active child runs even while its own
 turn is idle. Completion of the member's planning turn does not imply its
-delegated work has finished. When only child runs are active, the Crew summary
-status says "Delegated work running". Driving sessions still lists dashboard
+delegated work has finished. When only child runs are active, the Work log
+tab's status line says "Delegated work running". Driving sessions still lists dashboard
 sessions created by the member; child runs do not become dashboard sessions.
 
 Facts, rules and experiences all support correction and explicit forgetting.
@@ -718,6 +718,53 @@ outranks all four and is not considered there.
 The loader is defensive about hand-edited config: a non-string `model` or
 `triggers` collapses to `""`, an unknown `reasoning_effort` collapses to inherit,
 and a junk watchdog override collapses to `0`.
+
+### Crewmate panel: Notes, Work log, Dashboard
+
+The Crewmates page's right panel has exactly three host tabs, in this order:
+**Notes**, **Work log**, **Dashboard**.
+
+**Notes** renders the crewmate's self-maintained briefing
+(`members/<slug>/briefing.md`) read-only, as markdown, through
+`GET /api/members/{slug}/briefing?member=<name>`. The response carries `slug`,
+`member` (the exact name echoed back — the slug is lossy, so the frontend keys
+its cache by name), `supported`, `text`, `updated_ts` (the file's mtime in epoch
+seconds, `null` when there is no file) and `path` (the absolute briefing path).
+`text` is `""` and `updated_ts` is `null` for a crewmate that has not written
+notes yet; that is the normal state, never a 404. `supported` is
+`member_briefing_supported()`: on a platform without `O_NOFOLLOW` plus the
+pinned ancestor walk the read fails closed to `""` and the panel says the notes
+cannot be read on this computer instead of showing an empty briefing. The text
+is `read_member_briefing`'s output — cut at `MEMBER_BRIEFING_MAX_CHARS` with its
+visible marker, shown as-is — and is redacted through the same chain as the
+activity endpoint (`redact_exfiltration_urls`, then `redact_credentials`)
+before it crosses the network boundary, because the file is agent-written.
+Editing goes through the dashboard file viewer on the returned `path` (the
+existing `/api/file-read` route and its path policy); this endpoint never
+writes. App-token callers are denied exactly as on every other member surface.
+`path` is the LEXICAL location under the members root, computed off the event
+loop together with the read, never the resolved one: a `members/<slug>` swapped
+for a symlink to a peer's directory passes `member_dir`'s containment check but
+is refused by the pinned read, so a resolved pointer would aim an Edit at the
+peer's notes while the text already reads as none. The exact `member` must
+derive the slug, exist, and be the ONLY crew that derives it (the rules
+endpoint's posture): the briefing is one file per slug, so for a colliding slug
+the notes belong to neither crewmate and the read answers 409
+`briefing_slug_ambiguous`, which the panel renders as a plain sentence naming
+the fix (rename one of the two); 400 `member_slug_mismatch` and 404
+`member_not_found` cover the other two mismatches. When `supported` is false
+`updated_ts` is `null` too, so the panel never dates notes it cannot read.
+
+**Work log** is the live status line, the today / 7-day counters and recent
+activity from `/activity`, the sessions the crewmate is driving, the
+auto-patrol status, and the thread's Crew Log session record.
+
+**Dashboard** is the crewmate's published webview
+(`GET /api/members/{slug}/panel`).
+
+Settings content — the built-from template, wake sources and schedules, the
+memory binding, cloud — lives only on the crew editor / detail page.
+Operator-facing memory diagnostics never render in the panel.
 
 ## Selection: the `select_crew` contract
 
@@ -845,7 +892,7 @@ name, and it resolves an empty crew too so the concrete template stays inside
 | `test/test_open_slots_persistence.py` (`test_restore_carries_the_agent_selection_namespace`) | A template-picked slot restores as a template pick; an unknown persisted kind reads as name-only |
 | `test/test_select_crew.py` | Roster excludes the default crew and every triggerless crew, carries `default_agent` plus guidance; a named crew returns its bindings; an unknown name returns `error` plus `available`; the schema accepts spaces and dots in a crew name |
 | `test/test_crew_reasoning_effort.py` | Per-crew effort reaches a crew dispatch |
-| `test/test_members.py`, `test/test_members_dm_thread.py` | Slug validation and containment, activity recording and dedupe, DM-binding canonicality, rules and briefing reads |
+| `test/test_members.py`, `test/test_members_dm_thread.py` | Slug validation and containment, activity recording and dedupe, DM-binding canonicality, rules and briefing reads, briefing endpoint |
 | `test/test_chat_send_agent_model_default.py` | The crew model default a new session starts on |
 
 ## Retired: Crew Mode

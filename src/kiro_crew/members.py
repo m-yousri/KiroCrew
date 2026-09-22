@@ -983,6 +983,33 @@ def read_member_briefing(slug: str) -> str:
     return text
 
 
+def member_briefing_updated_ts(slug: str) -> float | None:
+    """Epoch seconds of the briefing file's last write, or ``None`` when there is none.
+
+    ``os.lstat`` (never follows a link) on :func:`member_briefing_path`; anything
+    that is not a regular file, and every failure, reads as ``None`` — the same
+    total contract as :func:`read_member_briefing`, including its fail-closed
+    half: where :func:`member_briefing_supported` is false the text reads as
+    ``""``, so the stamp reads as ``None`` too, or a panel would date notes it
+    just said it cannot read. Blocking file IO.
+    """
+    if not member_briefing_supported():
+        return None
+    try:
+        path = member_briefing_path(slug)
+    except (MemberSlugError, OSError, RuntimeError):
+        return None
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return None
+    if not stat.S_ISREG(st.st_mode):
+        # A symlink (lstat reports the link itself), FIFO or directory is never
+        # a briefing, so it has no "last written" moment to report.
+        return None
+    return float(st.st_mtime)
+
+
 def record_activity(
     member: str,
     session_key: str,

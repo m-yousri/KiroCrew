@@ -55,6 +55,12 @@ export const membersRosterQuery = {
 export const memberActivityQueryKey = (slug: string, member: string) =>
   ['member-activity', slug, member] as const
 
+/** Query key for a member's briefing markdown (Notes tab). Keyed by slug and
+ *  exact name: slugs are lossy, so two names sharing a slug have distinct
+ *  briefings. */
+export const memberBriefingQueryKey = (slug: string, member: string) =>
+  ['member-briefing', slug, member] as const
+
 /**
  * The outcome of the last thread open for one member — what
  * POST /api/members/{slug}/thread answered. Written by the open mutation

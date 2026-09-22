@@ -1429,7 +1429,7 @@ def test_deploy_ttl_nonzero_no_base_stack_returns_409(monkeypatch, tmp_path):
     status, payload = _run(handlers._do_deploy({
         "site_id": "test", "local_dir": str(src), "confirm": True, "ttl_hours": 72}))
     assert status == 409
-    assert "reaper base stack" in payload["error"]
+    assert "reaper base stack" in payload["details"]
     assert engine_called == []
 
 
@@ -1703,8 +1703,12 @@ def test_scan_tree_real_binary_no_credentials_deploys_clean(tmp_path):
 # sensitive-path walk and the scan.
 
 
-def _webapp_store(app_dir: Path, kind: str = "webapp"):
-    """A store whose single artifact is a webapp pointing at ``app_dir``."""
+def _webapp_store(app_dir: Path | str, kind: str = "webapp"):
+    """A store whose single artifact is a webapp pointing at ``app_dir``.
+
+    Accepts a bare string so a test can pass "" — ``str(Path(""))`` is ".", which
+    would exercise the containment branch instead of the empty-metadata one.
+    """
     meta = SimpleNamespace(app_dir=str(app_dir))
     art = SimpleNamespace(kind=kind, content="app summary", name="Terrace",
                           webapp_metadata=meta)
@@ -1785,7 +1789,7 @@ def test_webapp_without_built_public_dir_is_refused_with_a_reason(monkeypatch, t
         {"site_id": "unbuilt", "artifact_slug": "unbuilt-app"}))
     assert status == 400
     assert payload["code"] == "webapp_root_unavailable"
-    assert "public/" in payload["error"]
+    assert "public/" in payload["details"]
 
 
 def test_webapp_app_dir_outside_allowed_roots_is_refused(monkeypatch, tmp_path):
@@ -1808,7 +1812,7 @@ def test_webapp_app_dir_outside_allowed_roots_is_refused(monkeypatch, tmp_path):
 def test_webapp_with_empty_app_dir_is_refused_with_a_reason(monkeypatch):
     _set_profile(monkeypatch)
     monkeypatch.setattr(handlers, "get_default_store",
-                        lambda: _webapp_store(Path("")), raising=False)
+                        lambda: _webapp_store(""), raising=False)
     monkeypatch.setattr(handlers, "_HAS_ARTIFACTS", True)
     status, payload = _run(handlers._do_deploy(
         {"site_id": "x", "artifact_slug": "x-app"}))
@@ -1881,9 +1885,13 @@ def test_finite_ttl_without_base_stack_returns_a_keyed_409(monkeypatch, webapp_t
          "confirm": True, "ttl_hours": 72}))
     assert status == 409
     assert payload["code"] == "reaper_required"
-    # The raw operator-facing sentence is preserved; the affordances are added
-    # beside it, not in place of it.
-    assert "kirocrew-deploy-base" in payload["error"]
+    # The banner sentence names no stack and no parameter: it says what happened
+    # and what the user can do. The technical form moves to `details`, which the
+    # UI shows behind a toggle.
+    assert "kirocrew-deploy-base" not in payload["error"]
+    assert "ttl_hours" not in payload["error"]
+    assert "72 hours" in payload["error"]
+    assert "kirocrew-deploy-base" in payload["details"]
     assert payload["remediation"].endswith("--profile p --region us-west-2")
 
 
@@ -1992,3 +2000,66 @@ def test_backfill_failure_does_not_fail_a_successful_deploy(monkeypatch, webapp_
          "confirm": True, "ttl_hours": 0}))
     assert status == 200
     assert payload["site_id"] == "terrace"
+
+
+# --- plain banner / technical details split (ruling G, #12816) -------------
+#
+# Raymond read the reaper 409 and could not tell what to do. The fields now have
+# one audience each: `error` is the sentence in the red banner, `details` holds
+# the stack and parameter names behind the UI's Details toggle, `remediation` is
+# the runnable command, `code` is what the buttons key off.
+
+_JARGON = ("kirocrew-deploy-base", "kirocrew-deploy-reaper", "install-reaper.sh",
+           "ttl_hours", "reaper", "webapp_metadata", "app_dir")
+
+
+def test_reaper_banner_sentence_carries_no_jargon(monkeypatch, webapp_tree):
+    _set_profile(monkeypatch)
+    monkeypatch.setattr(handlers, "get_default_store",
+                        lambda: _webapp_store(webapp_tree), raising=False)
+    monkeypatch.setattr(handlers, "_HAS_ARTIFACTS", True)
+    monkeypatch.setattr(engine, "run_aws", lambda a, p, t: (1, "", "no stack"))
+    status, payload = _run(handlers._do_deploy(
+        {"site_id": "terrace", "artifact_slug": "terrace-app",
+         "confirm": True, "ttl_hours": 72}))
+    assert status == 409
+    banner = payload["error"].lower()
+    for term in _JARGON:
+        assert term.lower() not in banner, f"banner leaked {term!r}: {payload['error']}"
+    # It still has to say what happened and offer a way out.
+    assert "72 hours" in payload["error"]
+    assert "permanent" in payload["error"]
+    # And nothing technical is LOST — it moved.
+    assert "kirocrew-deploy-base" in payload["details"]
+
+
+def test_unbuilt_app_banner_sentence_carries_no_jargon(monkeypatch, tmp_path):
+    _set_profile(monkeypatch)
+    ws = tmp_path / "workspace"
+    app_dir = ws / "unbuilt"
+    app_dir.mkdir(parents=True)
+    monkeypatch.setattr(handlers, "_allowed_local_roots", lambda: [ws.resolve()])
+    monkeypatch.setattr(handlers, "get_default_store",
+                        lambda: _webapp_store(app_dir), raising=False)
+    monkeypatch.setattr(handlers, "_HAS_ARTIFACTS", True)
+    status, payload = _run(handlers._do_deploy(
+        {"site_id": "unbuilt", "artifact_slug": "unbuilt-app"}))
+    assert status == 400
+    banner = payload["error"].lower()
+    for term in _JARGON:
+        assert term.lower() not in banner, f"banner leaked {term!r}: {payload['error']}"
+    assert "public/" in payload["details"]
+
+
+def test_empty_app_dir_banner_sentence_carries_no_jargon(monkeypatch):
+    _set_profile(monkeypatch)
+    monkeypatch.setattr(handlers, "get_default_store",
+                        lambda: _webapp_store(""), raising=False)
+    monkeypatch.setattr(handlers, "_HAS_ARTIFACTS", True)
+    status, payload = _run(handlers._do_deploy(
+        {"site_id": "x", "artifact_slug": "x-app"}))
+    assert status == 400
+    banner = payload["error"].lower()
+    for term in _JARGON:
+        assert term.lower() not in banner, f"banner leaked {term!r}: {payload['error']}"
+    assert "app_dir" in payload["details"]

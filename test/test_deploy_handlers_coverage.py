@@ -591,7 +591,7 @@ class TestDoDeployRefusals:
             engine, "run_aws", _aws_router([("describe-stacks", (0, "not-json", ""))]))
         status, payload = await handlers._do_deploy(
             {"site_id": "s", "local_dir": str(_site), "confirm": True})
-        assert status == 409 and "reaper base stack" in payload["error"]
+        assert status == 409 and "reaper base stack" in payload["details"]
 
     @pytest.mark.asyncio
     async def test_missing_reaper_stack_blocks_finite_ttl(self, _site, monkeypatch):
@@ -602,7 +602,10 @@ class TestDoDeployRefusals:
         ]))
         status, payload = await handlers._do_deploy(
             {"site_id": "s", "local_dir": str(_site), "confirm": True})
-        assert status == 409 and "kirocrew-deploy-reaper" in payload["error"]
+        # Stack names moved out of the banner text into `details`; `code` is the
+        # stable machine field.
+        assert status == 409 and "kirocrew-deploy-reaper" in payload["details"]
+        assert payload["code"] == "reaper_required"
 
     @pytest.mark.asyncio
     async def test_reaper_probe_exception_blocks_finite_ttl(self, _site, monkeypatch):
@@ -617,7 +620,8 @@ class TestDoDeployRefusals:
         monkeypatch.setattr(engine, "run_aws", _run_aws)
         status, payload = await handlers._do_deploy(
             {"site_id": "s", "local_dir": str(_site), "confirm": True})
-        assert status == 409 and "kirocrew-deploy-reaper" in payload["error"]
+        assert status == 409 and "kirocrew-deploy-reaper" in payload["details"]
+        assert payload["code"] == "reaper_required"
 
     @pytest.mark.asyncio
     async def test_stale_preview_digest_is_refused(self, _site, monkeypatch):

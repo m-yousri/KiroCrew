@@ -1175,7 +1175,18 @@ def deploy_artifact(name: str, args: dict[str, Any]) -> str:
     # carry file content.
     from kiro_crew.deploy.handlers import _redact_text as _deploy_redact
     if d.get("error"):
-        return f"Error: {_deploy_redact(str(d['error']))}"
+        # `error` is now the plain human sentence and `details` carries the stack
+        # and parameter names. Relay BOTH: the LLM is the caller that needs to
+        # read "use ttl_hours=0" to retry correctly, and the banner-friendly
+        # sentence alone would strip exactly that.
+        msg = _deploy_redact(str(d["error"]))
+        extra = _deploy_redact(str(d.get("details", "")))
+        remedy = _deploy_redact(str(d.get("remediation", "")))
+        if extra:
+            msg = f"{msg}\nDetails: {extra}"
+        if remedy:
+            msg = f"{msg}\nCommand: {remedy}"
+        return f"Error: {msg}"
     if d.get("blocked"):
         findings = _deploy_redact(str(d.get("findings", "")))
         if d.get("credential"):

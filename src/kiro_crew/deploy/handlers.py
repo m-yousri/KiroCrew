@@ -564,7 +564,17 @@ def _stage_artifact_html(kind: str, content: str, name: str) -> tuple[list, str,
 
 
 class WebAppRootError(Exception):
-    """A kind=webapp artifact whose servable static root cannot be resolved."""
+    """A kind=webapp artifact whose servable static root cannot be resolved.
+
+    Carries two strings on purpose: ``str(exc)`` is the plain sentence a
+    non-AWS reader gets in the banner, and ``details`` holds the field and
+    directory names that only mean something to an operator — shown behind the
+    UI's Details toggle rather than in the red banner.
+    """
+
+    def __init__(self, message: str, details: str = "") -> None:
+        super().__init__(message)
+        self.details = details
 
 
 def resolve_webapp_public_dir(slug: str) -> Path | None:
@@ -600,8 +610,9 @@ def resolve_webapp_public_dir(slug: str) -> Path | None:
     raw = (getattr(meta, "app_dir", "") or "").strip()
     if not raw:
         raise WebAppRootError(
-            "this app artifact records no local directory (webapp_metadata.app_dir "
-            "is empty), so there is nothing to publish"
+            "This app has no saved folder on this machine, so there is nothing "
+            "to publish. Ask the agent to rebuild it.",
+            "webapp_metadata.app_dir is empty",
         )
     try:
         app_dir = Path(os.path.expanduser(raw)).resolve()
@@ -609,9 +620,17 @@ def resolve_webapp_public_dir(slug: str) -> Path | None:
         # ValueError: embedded NUL in a crafted app_dir. The write path rejects
         # control characters, but metadata predating that validation must fail
         # closed here rather than raise OSError out of the handler.
-        raise WebAppRootError("this app artifact's recorded directory cannot be read") from None
+        raise WebAppRootError(
+            "This app's saved folder cannot be read, so there is nothing to "
+            "publish.",
+            f"webapp_metadata.app_dir could not be resolved: {raw!r}",
+        ) from None
     if not app_dir.is_dir():
-        raise WebAppRootError("this app artifact's recorded directory no longer exists")
+        raise WebAppRootError(
+            "This app's folder is gone from this machine, so there is nothing "
+            "to publish. Ask the agent to rebuild it.",
+            f"webapp_metadata.app_dir does not exist: {app_dir}",
+        )
     for root in _allowed_local_roots():
         try:
             app_dir.relative_to(root)
@@ -620,14 +639,18 @@ def resolve_webapp_public_dir(slug: str) -> Path | None:
             continue
     else:
         raise WebAppRootError(
-            "this app artifact's directory is outside your home and workspace "
-            "directories, so it cannot be published"
+            "This app is saved outside the folders KiroCrew is allowed to "
+            "publish from, so it cannot be published from here.",
+            f"webapp_metadata.app_dir {app_dir} is outside the allowed local "
+            "roots",
         )
     public = app_dir / "public"
     if not public.is_dir():
         raise WebAppRootError(
-            "this app has no built public/ directory yet — only a built static "
-            "root can be published from here"
+            "This app has not been built yet, so there is no finished page to "
+            "publish. Ask the agent to build it, then try again.",
+            f"no public/ directory under {app_dir} — the deploy contract's "
+            "static root is app_dir/public",
         )
     try:
         resolved = public.resolve()
@@ -636,12 +659,15 @@ def resolve_webapp_public_dir(slug: str) -> Path | None:
         resolved.relative_to(app_dir)
     except (OSError, ValueError):
         raise WebAppRootError(
-            "this app's public/ directory resolves outside the app directory"
+            "This app's built folder points somewhere outside the app, so it "
+            "cannot be published.",
+            f"{public} resolves outside its app_dir {app_dir}",
         ) from None
     if not (resolved / "index.html").is_file():
         raise WebAppRootError(
-            "this app's public/ directory has no index.html, so a published link "
-            "would not resolve"
+            "This app's built folder has no home page, so the published link "
+            "would not open. Ask the agent to rebuild it.",
+            f"no index.html in {resolved}",
         )
     return resolved
 
@@ -794,8 +820,13 @@ async def _do_deploy(params: dict[str, Any]) -> tuple[int, dict[str, Any]]:
             except WebAppRootError as e:
                 # A webapp whose root is not publishable: say WHICH precondition
                 # failed. The caller turns this into the "Deploy via agent"
-                # affordance rather than a dead button.
-                return 400, {"error": str(e), "code": "webapp_root_unavailable"}
+                # affordance rather than a dead button. Plain sentence in
+                # `error`, field/directory names in `details`.
+                payload: dict[str, Any] = {
+                    "error": str(e), "code": "webapp_root_unavailable"}
+                if getattr(e, "details", ""):
+                    payload["details"] = e.details
+                return 400, payload
         if artifact_slug and webapp_root is None:
 
             def _resolve_artifact(slug: str) -> tuple[list["Finding"], str, int]:
@@ -1109,21 +1140,27 @@ async def _do_deploy(params: dict[str, Any]) -> tuple[int, dict[str, Any]]:
             pass
 
         if not manifest_bucket and ttl_hours != 0:
-            # Precondition failures render the EXACT operator command
-            # with the request's real profile/region so remediation is
-            # copy-paste, not archaeology.
-            #
-            # `code` is what the dashboard keys its two affordances off — deploy
-            # as persistent, or copy the install command. It reads the code
-            # rather than this sentence so the wording stays free to change
-            # without silently turning the buttons off.
+            # Two audiences, two fields. `error` is the sentence a non-AWS person
+            # reads in the banner: what happened, and what they can do next.
+            # `details` carries the stack and parameter names, which mean nothing
+            # to that reader but are exactly what an operator (or the MCP tool's
+            # LLM caller, which needs ttl_hours=0 to retry correctly) acts on;
+            # the UI shows it behind a Details toggle. `remediation` is the
+            # runnable command. `code` is what the dashboard keys its two
+            # affordances off, so the wording stays free to change without
+            # silently turning the buttons off.
             return 409, {
                 "error": (
+                    f"This deploy is set to expire in {ttl_hours} hours, but your "
+                    "AWS account has no auto-cleanup installed yet. Deploy it as "
+                    "permanent instead, or install auto-cleanup first."
+                ),
+                "code": "reaper_required",
+                "details": (
                     "Finite-TTL deploys require the reaper base stack "
                     "(kirocrew-deploy-base). Use ttl_hours=0 for persistent "
                     "or install the reaper (install-reaper.sh)."
                 ),
-                "code": "reaper_required",
                 "remediation": _reaper_remediation(profile, region),
             }
 
@@ -1143,11 +1180,17 @@ async def _do_deploy(params: dict[str, Any]) -> tuple[int, dict[str, Any]]:
             if reaper_rc != 0:
                 return 409, {
                     "error": (
+                        f"This deploy is set to expire in {ttl_hours} hours, but "
+                        "your AWS account's auto-cleanup is not finished "
+                        "installing. Deploy it as permanent instead, or finish "
+                        "installing auto-cleanup first."
+                    ),
+                    "code": "reaper_required",
+                    "details": (
                         "Finite-TTL deploys require the reaper stack "
                         "(kirocrew-deploy-reaper). Install the reaper "
                         "(install-reaper.sh) or use ttl_hours=0 for persistent."
                     ),
-                    "code": "reaper_required",
                     "remediation": _reaper_remediation(profile, region),
                 }
 

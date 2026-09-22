@@ -54,6 +54,7 @@ const pointsOf = (
   toolArgs = false,
   compaction = false,
   memoryText = false,
+  judgeProvider = 'auto',
 ) => {
   const granted: Record<string, boolean> = {
     tool_args: toolArgs,
@@ -69,6 +70,14 @@ const pointsOf = (
     { id: 'model.route', needs_scope: null, status: status(null) },
     { id: 'compaction.keep', needs_scope: 'compaction', status: status('compaction') },
     { id: 'memory.recall', needs_scope: 'memory_text', status: status('memory_text') },
+    // The judge, whose row the gateway resolves from the PROVIDER as well as the
+    // keystone: its small-model lane needs neither the endpoint consent nor a scope,
+    // so `judgeProvider: 'llm'` reports it active with the switch off.
+    {
+      id: 'nudge.wake',
+      needs_scope: null,
+      status: judgeProvider === 'llm' ? 'active' : status(null),
+    },
   ]
 }
 
@@ -391,6 +400,7 @@ describe('Decisions (Jev) preview card', () => {
       expect.stringContaining("Model for the turn's difficulty"),
       expect.stringContaining('Which tool calls a compaction would keep'),
       expect.stringContaining('Which recalled memories reach the prompt'),
+      expect.stringContaining('Whether a quiet check-in wakes you'),
     ])
     expect(screen.getByText(/what Jev decides while this is on/i)).toBeInTheDocument()
   })
@@ -483,8 +493,8 @@ describe('Decisions (Jev) preview card', () => {
 
     // End and Home are the ends of the PROJECTED list, whatever the gateway sent.
     fireEvent.keyDown(pointRow('Automatic skill choice'), { key: 'End' })
-    await waitFor(() => expect(panel()).toContain('memory.recall'))
-    fireEvent.keyDown(pointRow('Which recalled memories reach the prompt'), {
+    await waitFor(() => expect(panel()).toContain('nudge.wake'))
+    fireEvent.keyDown(pointRow('Whether a quiet check-in wakes you'), {
       key: 'Home',
     })
     await waitFor(() => expect(panel()).toContain('skills.select'))
@@ -555,6 +565,30 @@ describe('Decisions (Jev) preview card', () => {
     // INHERIT is what an unpinned tier reads as, and no model id is named for the
     // reader: an id their account is not offered would fail on the first prompt.
     expect(screen.getByRole('tabpanel').textContent).toContain("Keep the session's own model")
+  })
+
+  it('offers nudge.wake its provider and model pickers, reachable with consent off', async () => {
+    // Consent OFF and the small model chosen: the state the lane exists for. Every
+    // other point's controls are withheld here, so this also pins that the judge's two
+    // are deliberately not gated on the switch.
+    stubGateway(
+      { enabled: false, points: pointsOf(false, false, false, false, 'llm') },
+      { decisions: { bucket: 100, nudge_wake: { provider: 'llm', llm_model: '' } } },
+    )
+    renderSection()
+    await waitFor(() => {
+      expect(pointRow('Whether a quiet check-in wakes you')).toBeInTheDocument()
+    })
+    openPoint('Whether a quiet check-in wakes you')
+    await waitFor(() => {
+      expect(screen.getByText('Which judge answers')).toBeInTheDocument()
+    })
+    expect(screen.getByText('Model for the small-model judge')).toBeInTheDocument()
+    const panelText = screen.getByRole('tabpanel').textContent ?? ''
+    // The chosen provider reads as the small model, and the model reads as INHERIT --
+    // no model id is named for the reader, for the same reason a tier names none.
+    expect(panelText).toContain("A small model on this machine's own provider")
+    expect(panelText).toContain("Keep the session's own model")
   })
 
   it('fades the egress note only when the gateway cannot run this at all', async () => {

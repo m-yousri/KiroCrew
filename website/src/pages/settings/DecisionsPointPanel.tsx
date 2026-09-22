@@ -2,6 +2,10 @@ import { SettingsToggle, SettingsSelect } from '../../components/settings'
 import {
   DECISIONS_MODEL_ROUTE_PATH,
   DECISIONS_MODEL_ROUTE_TIERS,
+  DECISIONS_NUDGE_WAKE_MODEL_PATH,
+  DECISIONS_NUDGE_WAKE_POINT,
+  DECISIONS_NUDGE_WAKE_PROVIDER_PATH,
+  DECISIONS_NUDGE_WAKE_PROVIDERS,
   POINT_NEEDS_SCOPE,
   type DecisionPointRow,
 } from './decisionsPreview'
@@ -50,6 +54,14 @@ export interface DecisionsPointPanelProps {
   inheritLabel: string
   tiersDisabled: boolean
   onTierChange: (tier: string, value: string) => void
+  /** The judge point's provider and model, its option labels, and its writers. */
+  judgeProvider: string
+  judgeModel: string
+  judgeModelOptions: string[]
+  providerLabel: Record<string, string>
+  judgeDisabled: boolean
+  onJudgeProviderChange: (value: string) => void
+  onJudgeModelChange: (value: string) => void
   /** A sentence per `config.json` path this card points at instead of controlling. */
 }
 
@@ -69,6 +81,13 @@ export function DecisionsPointPanel({
   inheritLabel,
   tiersDisabled,
   onTierChange,
+  judgeProvider,
+  judgeModel,
+  judgeModelOptions,
+  providerLabel,
+  judgeDisabled,
+  onJudgeProviderChange,
+  onJudgeModelChange,
 }: DecisionsPointPanelProps) {
   return (
     <>
@@ -139,6 +158,39 @@ export function DecisionsPointPanel({
             />
           )
         })}
+      {/* The judge point's own two settings. Drawn on the same terms as the tier
+          pickers above and NOT gated on consent: the `llm` lane sends to the model
+          provider this machine already uses, so an owner with no Jev key has to be
+          able to reach these while the consent switch is off -- that is the case the
+          lane exists for. `auto` is the default and resolves without either provider
+          being named. The model list is the same advertised one every other picker
+          reads, and INHERIT is its default for the same reason a tier's is. */}
+      {row.id === DECISIONS_NUDGE_WAKE_POINT && (
+        <>
+          <SettingsSelect
+            label={i18nT('pages.developer.featurePreviewsTab.decisions_judge_provider')}
+            description={i18nT(
+              'pages.developer.featurePreviewsTab.decisions_judge_provider_desc',
+            )}
+            configKey={DECISIONS_NUDGE_WAKE_PROVIDER_PATH}
+            value={judgeProvider}
+            options={[...DECISIONS_NUDGE_WAKE_PROVIDERS]}
+            optionLabels={DECISIONS_NUDGE_WAKE_PROVIDERS.map(p => providerLabel[p] ?? p)}
+            onChange={onJudgeProviderChange}
+            disabled={judgeDisabled}
+          />
+          <SettingsSelect
+            label={i18nT('pages.developer.featurePreviewsTab.decisions_judge_model')}
+            description={i18nT('pages.developer.featurePreviewsTab.decisions_judge_model_desc')}
+            configKey={DECISIONS_NUDGE_WAKE_MODEL_PATH}
+            value={judgeModel}
+            options={judgeModelOptions}
+            optionLabels={judgeModelOptions.map(m => (m === '' ? inheritLabel : m))}
+            onChange={onJudgeModelChange}
+            disabled={judgeDisabled}
+          />
+        </>
+      )}
       {/* The one setting this card does NOT offer a control for, on the one point that
           has one. A reader must not have to assume the card is the whole story, and the
           sentence names the `config.json` path they would grep for.

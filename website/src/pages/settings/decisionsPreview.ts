@@ -123,6 +123,20 @@ export const DECISIONS_MODEL_ROUTE_PATH = 'decisions.model_route'
  */
 export const DECISIONS_MODEL_ROUTE_TIERS = ['simple', 'medium', 'complex'] as const
 
+/** Config path of the judge's provider choice: which oracle answers `nudge.wake`. */
+export const DECISIONS_NUDGE_WAKE_PROVIDER_PATH = 'decisions.nudge_wake.provider'
+
+/** Config path of the model the judge's small-model lane runs on. */
+export const DECISIONS_NUDGE_WAKE_MODEL_PATH = 'decisions.nudge_wake.llm_model'
+
+/**
+ * The judge's CLOSED provider domain, in the order the panel draws it
+ * (`JUDGE_PROVIDERS` in `config/sections.py`). `auto` first because it is the
+ * shipped default and the one choice that needs no knowledge of either provider:
+ * Jev when this card's consent stands for it, the small model otherwise.
+ */
+export const DECISIONS_NUDGE_WAKE_PROVIDERS = ['auto', 'jev', 'llm'] as const
+
 /**
  * The one vault entry the provider credential may come from. `provider.api_key`
  * honours exactly `secret://TYPESAFE_API_KEY` and nothing else, because
@@ -391,4 +405,28 @@ export function readModelRoute(config: unknown): Record<string, string> {
     out[tier] = typeof raw === 'string' ? raw : ''
   }
   return out
+}
+
+/**
+ * The judge point's two settings out of a `GET /api/config/kirocrew` body.
+ *
+ * `provider` falls back to the shipped `auto`, and an unknown word reads as `auto`
+ * too, because that is what the backend's own normalizer does with it — a picker
+ * showing a fourth value the gate will never honour would be lying about the lane
+ * that answers. `llmModel` reads as `''` for INHERIT, on the same terms as a
+ * `model_route` tier: a concrete id in a default fails on the first prompt for every
+ * account not entitled to it.
+ */
+export function readNudgeWake(config: unknown): { provider: string; llmModel: string } {
+  const root = asRecord(config)
+  const decisions = root ? asRecord(root.decisions) : null
+  const nudgeWake = decisions ? asRecord(decisions.nudge_wake) : null
+  const rawProvider = nudgeWake?.provider
+  const provider =
+    typeof rawProvider === 'string' &&
+    (DECISIONS_NUDGE_WAKE_PROVIDERS as readonly string[]).includes(rawProvider)
+      ? rawProvider
+      : 'auto'
+  const rawModel = nudgeWake?.llm_model
+  return { provider, llmModel: typeof rawModel === 'string' ? rawModel : '' }
 }

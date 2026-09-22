@@ -19,6 +19,8 @@
  *   decisions-overview-light.png            the list: one row per point the gateway
  *                                           projects, each with its status chip.
  *   decisions-detail-model-route-light.png   the model-route panel's three tier pickers.
+ *   decisions-detail-nudge-wake-light.png    the judge panel's provider and model
+ *                                           pickers, reachable with consent OFF.
  *   decisions-detail-needs-ok-light.png      tool.risk's panel with its scope switch
  *                                           off, and the line naming where the OK goes.
  *   decisions-detail-compaction-needs-ok-light.png
@@ -108,21 +110,28 @@ const POINTS = [
   { id: 'model.route', needs_scope: null, config_keys: [] },
   { id: 'compaction.keep', needs_scope: 'compaction', config_keys: [] },
   { id: 'memory.recall', needs_scope: 'memory_text', config_keys: [] },
+  // The one point whose row does not follow from consent alone: its `llm` provider
+  // sends to the model provider this machine already uses, so the fixture below
+  // reports it active on that provider whatever the keystone says, exactly as
+  // `_points` does.
+  { id: 'nudge.wake', needs_scope: null, config_keys: [] },
 ]
 
 // Status is resolved PER SCOPE, as the gateway resolves it: a row says whether ITS
 // OWN consent is recorded, so one flag for every scope would draw the wrong answer on
 // the point that needs the other one.
-const pointRows = ({ enabled, permits, toolArgs, compaction, memoryText }) => {
+const pointRows = ({ enabled, permits, toolArgs, compaction, memoryText, judgeProvider }) => {
   const granted = { tool_args: toolArgs, compaction, memory_text: memoryText }
   return POINTS.map(p => ({
     ...p,
     status:
-      !enabled || !permits
-        ? 'off'
-        : p.needs_scope && !granted[p.needs_scope]
-          ? 'needs_scope'
-          : 'active',
+      p.id === 'nudge.wake' && judgeProvider === 'llm'
+        ? 'active'
+        : !enabled || !permits
+          ? 'off'
+          : p.needs_scope && !granted[p.needs_scope]
+            ? 'needs_scope'
+            : 'active',
   }))
 }
 
@@ -139,6 +148,7 @@ const POINT_NAMES = {
   'model.route': "Model for the turn's difficulty",
   'compaction.keep': 'Which tool calls a compaction would keep',
   'memory.recall': 'Which recalled memories reach the prompt',
+  'nudge.wake': 'Whether a quiet check-in wakes you',
 }
 
 const STATUS_WORDS = { active: 'Switched on', needs_scope: 'Needs your OK', off: 'Off' }
@@ -158,6 +168,7 @@ const consentPayload = ({
   compaction = false,
   history_budget_chars = 0,
   points,
+  judgeProvider = 'auto',
 } = {}) => {
   const allowed = permits ?? (enabled && configured_endpoint === JEV_ENDPOINT)
   return {
@@ -182,6 +193,7 @@ const consentPayload = ({
           permits: allowed,
           toolArgs: tool_args,
           compaction,
+          judgeProvider,
         }),
       }),
   }
@@ -197,12 +209,19 @@ const consentPayload = ({
  * Consent itself is NOT in this config: it is the keystone, answered by the
  * `consent` option of `openPage`.
  */
-const withDecisions = ({ bucket = 100, history = 4000, modelRoute = {} } = {}) => ({
+const withDecisions = ({
+  bucket = 100,
+  history = 4000,
+  modelRoute = {},
+  judgeProvider = 'auto',
+  judgeModel = '',
+} = {}) => ({
   ...KIROCREW_CONFIG_FIXTURE,
   decisions: {
     bucket,
     history_budget_chars: history,
     model_route: modelRoute,
+    nudge_wake: { provider: judgeProvider, llm_model: judgeModel },
     provider: { endpoint: JEV_ENDPOINT, api_key: 'secret://TYPESAFE_API_KEY' },
   },
 })
@@ -512,6 +531,50 @@ async function main() {
     await panel.getByText('model.route', { exact: true }).waitFor({ state: 'visible', timeout: 5000 })
     await requireFramed(page, panel, "model.route's panel")
     await save(page, 'decisions-detail-model-route-light')
+    await page.context().close()
+  }
+
+  /* ── DETAIL: nudge.wake, the only panel whose point has TWO providers ────── */
+  {
+    // Consent DELIBERATELY off, and the provider set to the small model: this is the
+    // state the lane exists for, an owner with no Jev key, and it is the one frame
+    // that shows a point's controls reachable while the card's switch is off.
+    const page = await openPage({
+      config: withDecisions({ judgeProvider: 'llm' }),
+      consent: {
+        enabled: false,
+        // The row's chip comes from the gateway, and for THIS point the gateway reads
+        // the provider as well as the keystone: on the small model it is active with
+        // consent off. Selected here so the frame cannot show a chip that disagrees
+        // with the pickers beneath it.
+        judgeProvider: 'llm',
+      },
+    })
+    await page.goto(base + '/settings/developer', { waitUntil: 'domcontentloaded' })
+    // `enabled` here is whether the card is LIVE, not whether consent is recorded:
+    // the switch stays interactive with consent off, which is what makes this frame
+    // possible at all.
+    await settled(page, { enabled: true })
+    const panel = await openPoint(page, 'Whether a quiet check-in wakes you')
+    // The provider picker reads the CHOSEN word, not the default: a frame showing
+    // `auto` here would not show that the small model was selectable with the switch
+    // off, which is the whole claim of the frame.
+    const provider = panel.getByRole('combobox', { name: 'Which judge answers' })
+    await provider.waitFor({ state: 'visible', timeout: 5000 })
+    const chosen = (await provider.textContent()) ?? ''
+    if (!/small model/i.test(chosen)) {
+      throw new Error(`the judge provider does not read as the small model: ${JSON.stringify(chosen)}`)
+    }
+    // Its model picker defaults to inherit, on the same terms as a tier's.
+    const model = panel.getByRole('combobox', { name: 'Model for the small-model judge' })
+    await model.waitFor({ state: 'visible', timeout: 5000 })
+    const modelChosen = (await model.textContent()) ?? ''
+    if (!/keep the session/i.test(modelChosen)) {
+      throw new Error(`the judge model does not read as inherit: ${JSON.stringify(modelChosen)}`)
+    }
+    await panel.getByText('nudge.wake', { exact: true }).waitFor({ state: 'visible', timeout: 5000 })
+    await requireFramed(page, panel, "nudge.wake's panel")
+    await save(page, 'decisions-detail-nudge-wake-light')
     await page.context().close()
   }
 

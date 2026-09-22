@@ -180,6 +180,44 @@ def _sampling_admits_anybody() -> bool:
         return False
 
 
+def _judge_provider() -> str:
+    """``decisions.nudge_wake.provider`` as the card should read it. Never raises.
+
+    Its own helper beside :func:`_sampling_admits_anybody` and for the same reason:
+    one synchronous ``config.json`` read, on the worker thread both routes already
+    reach ``_points`` through. Anything unreadable resolves to the shipped default,
+    which is what the normal keystone rule then judges -- a config this handler could
+    not parse must not be what turns a row on.
+    """
+    try:
+        from kiro_crew.config.loader import KiroCrewConfig
+
+        decisions = getattr(KiroCrewConfig.load(), "decisions", None)
+        nudge_wake = getattr(decisions, "nudge_wake", None)
+        return str(getattr(nudge_wake, "provider", "") or "").strip().lower()
+    except Exception:
+        logger.debug("decisions: judge provider unreadable; judging the row on the keystone")
+        return ""
+
+
+def _llm_lane_available() -> bool:
+    """Whether the judge's small-model lane could answer at all. Never raises.
+
+    ``auto`` resolves to that lane whenever Jev is not armed, so the row's answer for
+    ``auto`` depends on whether the lane has a model call to make. A build whose
+    runner was never registered has no judge on that lane -- every ask raises and the
+    tick fires -- and a row calling that ``active`` would be the same error this
+    function exists to prevent, in the other direction.
+    """
+    try:
+        from kiro_crew.decisions import impl_llm
+
+        return bool(impl_llm.has_runner())
+    except Exception:
+        logger.debug("decisions: LLM lane availability unreadable; reporting unavailable")
+        return False
+
+
 def _points(state: dict, *, permits: bool) -> list[dict]:
     """One row per decision point this build ships, for the card's overview list.
 
@@ -206,6 +244,13 @@ def _points(state: dict, *, permits: bool) -> list[dict]:
     consent-shaped one. ``off`` is already every reason nothing is sent, and a share of
     zero is one of them; the share itself is on screen in the shared block, so a reader
     who sees every row off has the reason one glance away.
+
+    ONE point is not read off the keystone: the judge has two providers, and its row
+    has to name the lane that would actually run. ``llm`` reaches the model provider
+    the owner's sessions already use, so that row is ``active`` without the endpoint
+    consent or this point's scope. ``auto`` resolves to that same lane whenever Jev is
+    not armed, so it is ``active`` on either lane being able to answer. An explicitly
+    pinned ``jev`` is judged on the keystone alone. The sampled share binds all three.
     """
     from kiro_crew.decisions import consent
     from kiro_crew.decisions import gate as _gate
@@ -222,12 +267,41 @@ def _points(state: dict, *, permits: bool) -> list[dict]:
     # and every row resolves against the same answer, which is also what keeps the five
     # rows from disagreeing about whether sampling admits anybody.
     sampled = _sampling_admits_anybody()
+    # One read for the whole projection, like the share above. Only the judge row
+    # consults it, but reading it per row would be one config read per point.
+    judge_provider = _judge_provider()
     rows: list[dict] = []
     for name in _gate.DECISION_POINT_NAMES:
         # From the gate's own scope map, so a point that gains a scope is listed with
         # it and needs no edit here or in the card.
         scope = _gate.POINT_SCOPE_KEYS.get(name)
-        if not permits or not sampled:
+        # The judge is the one point with TWO providers, so its row cannot be read off
+        # the keystone alone: it has to name the lane that would actually run. Its LLM
+        # lane sends to the model provider the owner's sessions already use, which is
+        # why it needs neither the endpoint consent nor this point's scope -- so a row
+        # reporting ``off`` while that lane is answering is a row describing a state
+        # that is not happening. ``auto`` is the case that makes this more than one
+        # branch: ``_judge_authority`` sends it to the small model whenever Jev is not
+        # armed, so it is active on EITHER lane being able to answer. The sampled share
+        # still binds all three, exactly as it binds every other row: at a share of
+        # zero no session is asked, whatever the provider says.
+        if name == _gate.JUDGE_POINT:
+            jev_armed = permits and (scope is None or granted.get(scope, False))
+            if not sampled:
+                status = _POINT_OFF
+            elif judge_provider == _gate.LANE_LLM:
+                status = _POINT_ACTIVE
+            elif judge_provider == _gate.LANE_JEV:
+                # An explicitly pinned lane is judged on its own terms: the owner named
+                # it, and the small model being available is not an answer about Jev.
+                status = (
+                    _POINT_ACTIVE if jev_armed else (_POINT_NEEDS_SCOPE if permits else _POINT_OFF)
+                )
+            elif jev_armed or _llm_lane_available():
+                status = _POINT_ACTIVE
+            else:
+                status = _POINT_OFF
+        elif not permits or not sampled:
             status = _POINT_OFF
         elif scope is not None and not granted.get(scope, False):
             status = _POINT_NEEDS_SCOPE

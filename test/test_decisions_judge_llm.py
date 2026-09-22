@@ -409,6 +409,99 @@ class TestTheRunnerIsWiredAtBoot:
             impl_llm.set_runner(None)
 
 
+def handlers_mod():
+    """The decisions route module, imported at call time.
+
+    Function-local so this suite's import graph stays the decisions package: the
+    dashboard handler pulls in the whole route layer, and only the row-projection
+    tests below need it.
+    """
+    from kiro_crew.dashboard.handlers import decisions as handlers
+
+    return handlers
+
+
+class TestTheCardsRowForTheJudge:
+    """The row the owner reads, which cannot be derived from the keystone alone.
+
+    A row reporting ``off`` while the small-model lane is in fact answering is the one
+    error a reader has no way to check for themselves, so the projection reads the
+    provider for this point. Every other point keeps the keystone rule, which the last
+    case here pins by leaving the judge's own provider out of it.
+    """
+
+    def _rows(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        *,
+        provider: str,
+        permits: bool,
+        oracle: bool = True,
+    ) -> dict:
+        from kiro_crew.dashboard.handlers import decisions as handlers
+
+        monkeypatch.setattr(handlers, "_sampling_admits_anybody", lambda: True)
+        monkeypatch.setattr(handlers, "_judge_provider", lambda: provider)
+        monkeypatch.setattr(handlers, "_llm_lane_available", lambda: oracle)
+        rows = handlers._points({}, permits=permits)
+        return {row["id"]: row["status"] for row in rows}
+
+    def test_the_llm_provider_is_active_with_no_consent_at_all(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        rows = self._rows(monkeypatch, provider="llm", permits=False)
+        assert rows[gate.JUDGE_POINT] == handlers_mod()._POINT_ACTIVE
+
+    def test_auto_is_active_with_no_consent_when_the_small_model_can_answer(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``auto`` resolves to the small model when Jev is not armed, so a judge answers.
+
+        The row has to say that. This is the same defect as an ``llm`` row reading
+        ``off``, reached through the provider the config ships by default.
+        """
+        rows = self._rows(monkeypatch, provider="auto", permits=False, oracle=True)
+        assert rows[gate.JUDGE_POINT] == handlers_mod()._POINT_ACTIVE
+
+    def test_auto_is_off_when_neither_lane_can_answer(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No keystone and no registered runner: nothing would answer, so ``off``."""
+        rows = self._rows(monkeypatch, provider="auto", permits=False, oracle=False)
+        assert rows[gate.JUDGE_POINT] == handlers_mod()._POINT_OFF
+
+    def test_a_pinned_jev_is_judged_on_the_keystone_alone(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The owner named a lane; the small model being available says nothing about it."""
+        handlers = handlers_mod()
+        rows = self._rows(monkeypatch, provider="jev", permits=False, oracle=True)
+        assert rows[gate.JUDGE_POINT] == handlers._POINT_OFF
+        rows = self._rows(monkeypatch, provider="jev", permits=True, oracle=False)
+        assert rows[gate.JUDGE_POINT] == handlers._POINT_ACTIVE
+
+    def test_the_sampled_share_still_binds_every_provider(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """At a share of zero no session is asked, whatever the provider says."""
+        handlers = handlers_mod()
+        monkeypatch.setattr(handlers, "_sampling_admits_anybody", lambda: False)
+        monkeypatch.setattr(handlers, "_llm_lane_available", lambda: True)
+        for provider in ("llm", "auto", "jev"):
+            monkeypatch.setattr(handlers, "_judge_provider", lambda p=provider: p)
+            rows = {row["id"]: row["status"] for row in handlers._points({}, permits=True)}
+            assert rows[gate.JUDGE_POINT] == handlers._POINT_OFF
+
+    def test_the_judge_provider_does_not_reach_another_point(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``llm`` must not turn on a row that has nothing to do with the judge."""
+        rows = self._rows(monkeypatch, provider="llm", permits=False)
+        others = {name: status for name, status in rows.items() if name != gate.JUDGE_POINT}
+        assert others, "the projection listed no other point, so this asserts nothing"
+        assert set(others.values()) == {handlers_mod()._POINT_OFF}
+
+
 class TestLaneSelection:
     """``decisions.nudge_wake.provider`` against consent -- the matrix, not spot checks."""
 

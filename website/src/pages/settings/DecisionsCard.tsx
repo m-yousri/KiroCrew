@@ -16,10 +16,13 @@ import {
   DECISIONS_API_KEY_SECRET,
   DECISIONS_BUCKET_PATH,
   DECISIONS_MODEL_ROUTE_PATH,
+  DECISIONS_NUDGE_WAKE_MODEL_PATH,
+  DECISIONS_NUDGE_WAKE_PROVIDER_PATH,
   POINT_ACTIVE,
   POINT_NEEDS_SCOPE,
   readDecisions,
   readModelRoute,
+  readNudgeWake,
   type DecisionPointRow,
 } from './decisionsPreview'
 import { fmtPercent } from '../../i18n/format'
@@ -206,6 +209,15 @@ export function DecisionsCard() {
 
   /* ── Reads that feed the panels ──────────────────────────────────────────── */
   const modelRoute = readModelRoute(configQ.data)
+  // The judge point's own two values, read on the same terms as the tier map above.
+  const nudgeWake = readNudgeWake(configQ.data)
+  // INHERIT first, then every advertised id. `auto` is dropped because the empty
+  // option already means inherit and two words for it would read as two behaviours.
+  // A pinned id the backend no longer advertises is kept so a reader can switch off it.
+  const judgeModelOptions = ['', ...modelsQ.data.map(m => m.name).filter(m => m !== 'auto')]
+  if (nudgeWake.llmModel && !judgeModelOptions.includes(nudgeWake.llmModel)) {
+    judgeModelOptions.splice(1, 0, nudgeWake.llmModel)
+  }
   // The reviewed CEILING, off the keystone the switch writes. `config.json` carries
   // what the seam asks for and an agent may raise it; this is the number the gate
   // clamps to, so it is the one a reader may act on and the one the box edits.
@@ -329,6 +341,7 @@ export function DecisionsCard() {
       'pages.developer.featurePreviewsTab.decisions_point_compaction_keep',
     ),
     'memory.recall': i18nT('pages.developer.featurePreviewsTab.decisions_point_memory_recall'),
+    'nudge.wake': i18nT('pages.developer.featurePreviewsTab.decisions_point_nudge_wake'),
   }
   const POINT_WHAT: Record<string, string> = {
     'skills.select': i18nT('pages.developer.featurePreviewsTab.decisions_what_skills_select'),
@@ -341,6 +354,7 @@ export function DecisionsCard() {
     'memory.recall': i18nT(
       'pages.developer.featurePreviewsTab.decisions_what_memory_recall',
     ),
+    'nudge.wake': i18nT('pages.developer.featurePreviewsTab.decisions_what_nudge_wake'),
   }
   const STATUS_WORD: Record<string, string> = {
     [POINT_ACTIVE]: i18nT('pages.developer.featurePreviewsTab.decisions_status_active'),
@@ -362,6 +376,12 @@ export function DecisionsCard() {
     simple: i18nT('pages.developer.featurePreviewsTab.decisions_tier_simple'),
     medium: i18nT('pages.developer.featurePreviewsTab.decisions_tier_medium'),
     complex: i18nT('pages.developer.featurePreviewsTab.decisions_tier_complex'),
+  }
+  // One label per provider word the judge accepts, keyed as the config spells it.
+  const PROVIDER_LABEL: Record<string, string> = {
+    auto: i18nT('pages.developer.featurePreviewsTab.decisions_judge_provider_auto'),
+    jev: i18nT('pages.developer.featurePreviewsTab.decisions_judge_provider_jev'),
+    llm: i18nT('pages.developer.featurePreviewsTab.decisions_judge_provider_llm'),
   }
   const inheritLabel = i18nT('pages.developer.featurePreviewsTab.decisions_tier_inherit')
   const offWord = i18nT('pages.developer.featurePreviewsTab.decisions_status_off')
@@ -844,6 +864,24 @@ export function DecisionsCard() {
                     tiersDisabled={frozen}
                     onTierChange={(tier, value) =>
                       configMut.mutate({ path: `${DECISIONS_MODEL_ROUTE_PATH}.${tier}`, value })
+                    }
+                    judgeProvider={nudgeWake.provider}
+                    judgeModel={nudgeWake.llmModel}
+                    // A pinned model the backend no longer advertises stays selectable,
+                    // for the same reason a tier's does: otherwise a reader could not
+                    // switch back off it. `auto` is dropped because INHERIT already is
+                    // the empty option, and offering both would be two words for it.
+                    judgeModelOptions={judgeModelOptions}
+                    providerLabel={PROVIDER_LABEL}
+                    // NOT gated on consent, unlike the scope switch above: the small-model
+                    // lane needs none, and an owner with no Jev key must be able to pick
+                    // it while the switch is off.
+                    judgeDisabled={frozen}
+                    onJudgeProviderChange={value =>
+                      configMut.mutate({ path: DECISIONS_NUDGE_WAKE_PROVIDER_PATH, value })
+                    }
+                    onJudgeModelChange={value =>
+                      configMut.mutate({ path: DECISIONS_NUDGE_WAKE_MODEL_PATH, value })
                     }
                   />
                 </Suspense>

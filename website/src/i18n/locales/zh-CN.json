@@ -9924,6 +9924,25 @@
         "thinking": "思考中",
         "thought_process": "思考过程"
       },
+      "thread": {
+        "title": "线程",
+        "close": "关闭线程",
+        "reply_in_thread": "在线程中回复",
+        "open_thread": "打开线程",
+        "replies_count_other": "{{count}} 条回复",
+        "last_reply": "最后回复于{{when}}",
+        "you": "你",
+        "no_replies_yet": "还没有回复",
+        "replying": "{{name}} 正在回复…",
+        "reply_placeholder": "回复…",
+        "send_reply": "发送回复",
+        "err_replying": "{{name}} 还在回复中，请等它回复完。",
+        "err_parent_gone": "这条消息已不在此对话中。",
+        "err_too_long": "这条回复太长了。回复最多 32 KB。",
+        "err_full": "这个线程已满。",
+        "err_send_failed": "回复没有发出去，请再试一次。",
+        "err_load_failed": "无法加载这个线程，请再试一次。"
+      },
       "toolCallLine": {
         "diff_truncated": "diff 已截断",
         "aria_awaiting_approval": "等待批准工具：{{label}}",

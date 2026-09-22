@@ -10066,6 +10066,26 @@
         "thinking": "सोच रहा है",
         "thought_process": "विचार प्रक्रिया"
       },
+      "thread": {
+        "title": "थ्रेड",
+        "close": "थ्रेड बंद करो",
+        "reply_in_thread": "थ्रेड में उत्तर दो",
+        "open_thread": "थ्रेड खोलो",
+        "replies_count_one": "{{count}} उत्तर",
+        "replies_count_other": "{{count}} उत्तर",
+        "last_reply": "आख़िरी उत्तर {{when}}",
+        "you": "तुम",
+        "no_replies_yet": "अभी कोई उत्तर नहीं",
+        "replying": "{{name}} उत्तर दे रहा है…",
+        "reply_placeholder": "उत्तर दो…",
+        "send_reply": "उत्तर भेजो",
+        "err_replying": "{{name}} अभी उत्तर दे रहा है। उस उत्तर का इंतज़ार करो।",
+        "err_parent_gone": "वह संदेश अब इस चैट में नहीं है।",
+        "err_too_long": "वह उत्तर बहुत लंबा है। उत्तर की सीमा 32 KB है।",
+        "err_full": "यह थ्रेड भर गया है।",
+        "err_send_failed": "उत्तर नहीं गया। फिर कोशिश करो।",
+        "err_load_failed": "यह थ्रेड लोड नहीं हो सका। फिर कोशिश करो।"
+      },
       "toolCallLine": {
         "diff_truncated": "diff काट दिया गया",
         "aria_awaiting_approval": "टूल के लिए स्वीकृति की प्रतीक्षा: {{label}}",

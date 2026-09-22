@@ -10208,6 +10208,27 @@
         "thinking": "Réflexion",
         "thought_process": "Processus de réflexion"
       },
+      "thread": {
+        "title": "Fil",
+        "close": "Fermer le fil",
+        "reply_in_thread": "Répondre dans le fil",
+        "open_thread": "Ouvrir le fil",
+        "replies_count_one": "{{count}} réponse",
+        "replies_count_many": "{{count}} réponses",
+        "replies_count_other": "{{count}} réponses",
+        "last_reply": "Dernière réponse {{when}}",
+        "you": "Toi",
+        "no_replies_yet": "Pas encore de réponse",
+        "replying": "{{name}} est en train de répondre…",
+        "reply_placeholder": "Répondre…",
+        "send_reply": "Envoyer la réponse",
+        "err_replying": "{{name}} est encore en train de répondre. Attends cette réponse.",
+        "err_parent_gone": "Ce message n'est plus dans cette conversation.",
+        "err_too_long": "Cette réponse est trop longue. La limite est de 32 Ko.",
+        "err_full": "Ce fil est plein.",
+        "err_send_failed": "La réponse n'est pas partie. Réessaie.",
+        "err_load_failed": "Impossible de charger ce fil. Réessaie."
+      },
       "toolCallLine": {
         "diff_truncated": "diff tronqué",
         "aria_awaiting_approval": "En attente d’approbation pour l’outil : {{label}}",

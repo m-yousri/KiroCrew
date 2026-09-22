@@ -10350,6 +10350,28 @@
         "thinking": "Размышление",
         "thought_process": "Ход размышлений"
       },
+      "thread": {
+        "title": "Ветка",
+        "close": "Закрыть ветку",
+        "reply_in_thread": "Ответить в ветке",
+        "open_thread": "Открыть ветку",
+        "replies_count_one": "{{count}} ответ",
+        "replies_count_few": "{{count}} ответа",
+        "replies_count_many": "{{count}} ответов",
+        "replies_count_other": "{{count}} ответа",
+        "last_reply": "Последний ответ {{when}}",
+        "you": "Вы",
+        "no_replies_yet": "Ответов пока нет",
+        "replying": "{{name}} отвечает...",
+        "reply_placeholder": "Ответить...",
+        "send_reply": "Отправить ответ",
+        "err_replying": "{{name}} ещё отвечает. Дождитесь этого ответа.",
+        "err_parent_gone": "Этого сообщения больше нет в этом чате.",
+        "err_too_long": "Этот ответ слишком длинный. Лимит — 32 КБ.",
+        "err_full": "Эта ветка заполнена.",
+        "err_send_failed": "Ответ не отправился. Попробуйте ещё раз.",
+        "err_load_failed": "Не удалось загрузить эту ветку. Попробуйте ещё раз."
+      },
       "toolCallLine": {
         "diff_truncated": "diff усечён",
         "aria_awaiting_approval": "Ожидание одобрения инструмента: {{label}}",

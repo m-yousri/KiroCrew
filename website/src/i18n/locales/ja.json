@@ -9924,6 +9924,25 @@
         "thinking": "考え中",
         "thought_process": "思考プロセス"
       },
+      "thread": {
+        "title": "スレッド",
+        "close": "スレッドを閉じる",
+        "reply_in_thread": "スレッドで返信",
+        "open_thread": "スレッドを開く",
+        "replies_count_other": "{{count}} 件の返信",
+        "last_reply": "最終返信：{{when}}",
+        "you": "あなた",
+        "no_replies_yet": "まだ返信はありません",
+        "replying": "{{name}} が返信中…",
+        "reply_placeholder": "返信…",
+        "send_reply": "返信を送信",
+        "err_replying": "{{name}} はまだ返信中です。その返信を待ってください。",
+        "err_parent_gone": "そのメッセージはもうこのチャットにありません。",
+        "err_too_long": "その返信は長すぎます。返信の上限は 32 KB です。",
+        "err_full": "このスレッドは上限に達しました。",
+        "err_send_failed": "返信を送れませんでした。もう一度お試しください。",
+        "err_load_failed": "このスレッドを読み込めませんでした。もう一度お試しください。"
+      },
       "toolCallLine": {
         "diff_truncated": "diff は切り詰められました",
         "aria_awaiting_approval": "ツールの承認待ち: {{label}}",

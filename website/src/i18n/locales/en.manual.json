@@ -4008,6 +4008,26 @@
         "hide_reasoning": "Hide reasoning",
         "show_reasoning": "Show reasoning"
       },
+      "thread": {
+        "title": "Thread",
+        "close": "Close thread",
+        "reply_in_thread": "Reply in thread",
+        "open_thread": "Open thread",
+        "replies_count_one": "{{count}} reply",
+        "replies_count_other": "{{count}} replies",
+        "last_reply": "Last reply {{when}}",
+        "you": "You",
+        "no_replies_yet": "No replies yet",
+        "replying": "{{name}} is replying…",
+        "reply_placeholder": "Reply…",
+        "send_reply": "Send reply",
+        "err_replying": "{{name}} is still replying. Wait for that reply.",
+        "err_parent_gone": "That message is no longer in this chat.",
+        "err_too_long": "That reply is too long. Replies are capped at 32 KB.",
+        "err_full": "This thread is full.",
+        "err_send_failed": "The reply didn't go through. Try again.",
+        "err_load_failed": "Couldn't load this thread. Try again."
+      },
       "toolDetails": {
         "details_unavailable_for_historical_tool_calls": "Details unavailable for historical tool calls.",
         "formatted": "Formatted",

@@ -10066,6 +10066,26 @@
         "thinking": "Denkt nach",
         "thought_process": "Denkprozess"
       },
+      "thread": {
+        "title": "Thread",
+        "close": "Thread schließen",
+        "reply_in_thread": "Im Thread antworten",
+        "open_thread": "Thread öffnen",
+        "replies_count_one": "{{count}} Antwort",
+        "replies_count_other": "{{count}} Antworten",
+        "last_reply": "Letzte Antwort {{when}}",
+        "you": "Du",
+        "no_replies_yet": "Noch keine Antworten",
+        "replying": "{{name}} antwortet…",
+        "reply_placeholder": "Antworten…",
+        "send_reply": "Antwort senden",
+        "err_replying": "{{name}} antwortet noch. Warte auf diese Antwort.",
+        "err_parent_gone": "Diese Nachricht ist nicht mehr in diesem Chat.",
+        "err_too_long": "Diese Antwort ist zu lang. Antworten sind auf 32 KB begrenzt.",
+        "err_full": "Dieser Thread ist voll.",
+        "err_send_failed": "Die Antwort ist nicht angekommen. Versuche es noch einmal.",
+        "err_load_failed": "Dieser Thread konnte nicht geladen werden. Versuche es noch einmal."
+      },
       "toolCallLine": {
         "diff_truncated": "Diff gekürzt",
         "aria_awaiting_approval": "Warten auf Genehmigung für Werkzeug {{label}}",

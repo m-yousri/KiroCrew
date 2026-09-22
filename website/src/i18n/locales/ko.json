@@ -9924,6 +9924,25 @@
         "thinking": "생각 중",
         "thought_process": "사고 과정"
       },
+      "thread": {
+        "title": "스레드",
+        "close": "스레드 닫기",
+        "reply_in_thread": "스레드에서 답글 달기",
+        "open_thread": "스레드 열기",
+        "replies_count_other": "답글 {{count}}개",
+        "last_reply": "마지막 답글 {{when}}",
+        "you": "나",
+        "no_replies_yet": "아직 답글이 없습니다",
+        "replying": "{{name}}이(가) 답글을 쓰고 있습니다…",
+        "reply_placeholder": "답글…",
+        "send_reply": "답글 보내기",
+        "err_replying": "{{name}}이(가) 아직 답글을 쓰고 있습니다. 그 답글을 기다려 주세요.",
+        "err_parent_gone": "그 메시지는 이제 이 채팅에 없습니다.",
+        "err_too_long": "답글이 너무 깁니다. 답글은 32 KB까지입니다.",
+        "err_full": "이 스레드가 가득 찼습니다.",
+        "err_send_failed": "답글이 전송되지 않았습니다. 다시 시도해 주세요.",
+        "err_load_failed": "이 스레드를 불러올 수 없습니다. 다시 시도해 주세요."
+      },
       "toolCallLine": {
         "diff_truncated": "diff가 잘렸습니다",
         "aria_awaiting_approval": "도구 승인 대기 중: {{label}}",

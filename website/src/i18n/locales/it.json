@@ -10208,6 +10208,27 @@
         "thinking": "Riflessione",
         "thought_process": "Processo di ragionamento"
       },
+      "thread": {
+        "title": "Thread",
+        "close": "Chiudi il thread",
+        "reply_in_thread": "Rispondi nel thread",
+        "open_thread": "Apri il thread",
+        "replies_count_one": "{{count}} risposta",
+        "replies_count_many": "{{count}} risposte",
+        "replies_count_other": "{{count}} risposte",
+        "last_reply": "Ultima risposta {{when}}",
+        "you": "Tu",
+        "no_replies_yet": "Ancora nessuna risposta",
+        "replying": "{{name}} sta rispondendo…",
+        "reply_placeholder": "Rispondi…",
+        "send_reply": "Invia risposta",
+        "err_replying": "{{name}} sta ancora rispondendo. Aspetta quella risposta.",
+        "err_parent_gone": "Quel messaggio non è più in questa chat.",
+        "err_too_long": "Quella risposta è troppo lunga. Il limite è di 32 KB.",
+        "err_full": "Questo thread è pieno.",
+        "err_send_failed": "La risposta non è stata inviata. Riprova.",
+        "err_load_failed": "Impossibile caricare questo thread. Riprova."
+      },
       "toolCallLine": {
         "diff_truncated": "diff troncato",
         "aria_awaiting_approval": "In attesa di approvazione per lo strumento: {{label}}",

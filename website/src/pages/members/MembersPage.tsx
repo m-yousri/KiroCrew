@@ -72,6 +72,9 @@ import { setViewedThreadSlot, clearViewedThreadSlot } from '../../lib/viewedThre
 import CrewAvatar from '../../components/CrewAvatar'
 import CrewStateAvatar from '../../components/CrewStateAvatar'
 import ChatPane from '../../components/ChatPane'
+import type { ThreadHooks } from '../../app-sdk/messageRenderers'
+import { threadsApi, threadsQueryKey } from '../../api/threads'
+import ThreadPanel from './ThreadPanel'
 import CrewWebview from './CrewWebview'
 import ErrorBoundary from '../../components/ErrorBoundary'
 import ErrorNotice from '../../components/ErrorNotice'
@@ -1328,6 +1331,34 @@ export default function MembersPage() {
     if (!beside) setOverlayOpen(true)
     return true
   }, [confirmedSlot, tabsCtl, beside])
+  // Reply threads (screen 07). The footer data per message is one small read
+  // beside the transcript; the open thread takes over the side panel while it
+  // is on screen, and closing it hands the panel's tabs back. Keyed on the
+  // CONFIRMED slot only, like every other slot-bound view here.
+  const [openThreadMid, setOpenThreadMid] = useState<string | null>(null)
+  useEffect(() => { setOpenThreadMid(null) }, [confirmedSlot])
+  const threadsQuery = useQuery({
+    queryKey: threadsQueryKey(confirmedSlot || ''),
+    queryFn: () => threadsApi.summary(confirmedSlot),
+    enabled: !!confirmedSlot,
+    staleTime: 30_000,
+  })
+  const threadSummaries = threadsQuery.data?.threads
+  const openReplyThread = useCallback((mid: string) => {
+    setOpenThreadMid(mid)
+    if (!beside) setOverlayOpen(true)
+  }, [beside])
+  const closeReplyThread = useCallback(() => setOpenThreadMid(null), [])
+  const threadHooks = useMemo<ThreadHooks | undefined>(
+    () => (confirmedSlot
+      ? {
+          summaryOf: (mid: string) => threadSummaries?.[mid],
+          onOpen: openReplyThread,
+          crewmateName: activeName,
+        }
+      : undefined),
+    [confirmedSlot, threadSummaries, openReplyThread, activeName],
+  )
   // Whether the Crew summary body is on screen — the gate for its data reads
   // and its countdown tick, so a member whose panel shows a terminal does not
   // pay for a summary nobody is looking at. Read from what the panel SHOWS
@@ -2572,6 +2603,7 @@ export default function MembersPage() {
                     // ready" would contradict it one line down.
                     hideEmptyHint={activeThreadFailed}
                     openSideChat={openMemberSideChat}
+                    threads={threadHooks}
                   />
                 </ErrorBoundary>
               </div>
@@ -3424,8 +3456,33 @@ export default function MembersPage() {
                     animate={innerMotion.animate}
                     exit={innerMotion.exit}
                     transition={{ duration: 0.18, ease: [0.2, 0, 0, 1] }}
-                    className={beside ? 'h-full flex justify-end' : 'h-full flex justify-end max-w-full'}
+                    className={beside ? 'h-full flex justify-end relative' : 'h-full flex justify-end max-w-full relative'}
                   >
+                    {/* The open reply thread covers the panel's tabs while it is on
+                        screen and slides away on close, so the tabs the user had are
+                        where they left them. `mb-2` + `rounded-l-xl` match the
+                        panel's own frame (SidePanel's root) so the thread reads as
+                        the panel showing something else, not a second panel. */}
+                    <AnimatePresence initial={false}>
+                      {openThreadMid && confirmedSlot && (
+                        <motion.div
+                          key={`thread-${openThreadMid}`}
+                          initial={reduceMotion ? { opacity: 1 } : { x: 24, opacity: 0 }}
+                          animate={{ x: 0, opacity: 1 }}
+                          exit={reduceMotion ? { opacity: 0 } : { x: 24, opacity: 0 }}
+                          transition={{ duration: 0.18, ease: [0.2, 0, 0, 1] }}
+                          className={`absolute inset-0 z-20 overflow-hidden ${beside ? 'mb-2 rounded-l-xl border-l border-t border-b border-border' : ''}`}
+                          style={beside ? { inset: 0, bottom: 8 } : undefined}
+                        >
+                          <ThreadPanel
+                            slot={confirmedSlot}
+                            mid={openThreadMid}
+                            crewmateName={activeName}
+                            onClose={closeReplyThread}
+                          />
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
                     <SidePanel
                       {...panelProps}
                       panelHidden={panelHidden}

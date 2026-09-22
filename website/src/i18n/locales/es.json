@@ -10208,6 +10208,27 @@
         "thinking": "Pensando",
         "thought_process": "Proceso de razonamiento"
       },
+      "thread": {
+        "title": "Hilo",
+        "close": "Cerrar el hilo",
+        "reply_in_thread": "Responder en el hilo",
+        "open_thread": "Abrir el hilo",
+        "replies_count_one": "{{count}} respuesta",
+        "replies_count_many": "{{count}} respuestas",
+        "replies_count_other": "{{count}} respuestas",
+        "last_reply": "Última respuesta {{when}}",
+        "you": "Tú",
+        "no_replies_yet": "Aún no hay respuestas",
+        "replying": "{{name}} está respondiendo…",
+        "reply_placeholder": "Responder…",
+        "send_reply": "Enviar respuesta",
+        "err_replying": "{{name}} todavía está respondiendo. Espera esa respuesta.",
+        "err_parent_gone": "Ese mensaje ya no está en este chat.",
+        "err_too_long": "Esa respuesta es demasiado larga. El límite es de 32 KB.",
+        "err_full": "Este hilo está lleno.",
+        "err_send_failed": "La respuesta no se envió. Inténtalo de nuevo.",
+        "err_load_failed": "No se pudo cargar este hilo. Inténtalo de nuevo."
+      },
       "toolCallLine": {
         "diff_truncated": "diff truncado",
         "aria_awaiting_approval": "Esperando la aprobación de la herramienta: {{label}}",

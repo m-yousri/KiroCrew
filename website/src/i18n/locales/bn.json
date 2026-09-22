@@ -10066,6 +10066,26 @@
         "thinking": "ভাবছে",
         "thought_process": "চিন্তার প্রক্রিয়া"
       },
+      "thread": {
+        "title": "থ্রেড",
+        "close": "থ্রেড বন্ধ করুন",
+        "reply_in_thread": "থ্রেডে উত্তর দিন",
+        "open_thread": "থ্রেড খুলুন",
+        "replies_count_one": "{{count}}টি উত্তর",
+        "replies_count_other": "{{count}}টি উত্তর",
+        "last_reply": "শেষ উত্তর {{when}}",
+        "you": "আপনি",
+        "no_replies_yet": "এখনও কোনো উত্তর নেই",
+        "replying": "{{name}} উত্তর দিচ্ছে…",
+        "reply_placeholder": "উত্তর দিন…",
+        "send_reply": "উত্তর পাঠান",
+        "err_replying": "{{name}} এখনও উত্তর দিচ্ছে। সেই উত্তরের জন্য অপেক্ষা করুন।",
+        "err_parent_gone": "সেই বার্তাটি আর এই চ্যাটে নেই।",
+        "err_too_long": "উত্তরটি খুব দীর্ঘ। উত্তরের সীমা 32 KB।",
+        "err_full": "এই থ্রেড পূর্ণ হয়ে গেছে।",
+        "err_send_failed": "উত্তরটি পাঠানো যায়নি। আবার চেষ্টা করুন।",
+        "err_load_failed": "এই থ্রেড লোড করা যায়নি। আবার চেষ্টা করুন।"
+      },
       "toolCallLine": {
         "diff_truncated": "diff কাটা হয়েছে",
         "aria_awaiting_approval": "টুলের অনুমোদনের অপেক্ষায়: {{label}}",

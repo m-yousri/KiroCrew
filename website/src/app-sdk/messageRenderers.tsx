@@ -40,6 +40,8 @@ import { REASONING_ROLES } from '../pages/chat/groupDisplayItems'
 import MarkdownRenderer from '../components/MarkdownRenderer'
 import MessageErrorBoundary from '../components/MessageErrorBoundary'
 import { renderUserContent } from '../pages/chat/ChatPageMessageContent'
+import ThreadFooter from '../pages/chat/ThreadFooter'
+import type { ThreadSummary } from '../api/threads'
 import type { ChatMessage } from '../types'
 import { fmtMessageTime, fmtMessageTimeFull } from '../pages/chat/messageTime'
 import { turnHadPolicyBlock } from './turnPolicyBlock'
@@ -47,6 +49,16 @@ import { useLanguageGeneration } from '../i18n/useLanguageGeneration'
 import { isRejectedDecision } from '../utils/approvalDecision'
 
 /** Everything a renderer may read. Passed per row so entries stay pure functions. */
+/** What a host that offers reply threads hands the rows: the footer data per
+ *  parent `mid`, and the open action. Both are keyed by the message's durable
+ *  `meta.mid`, the only identity a thread can hang off. */
+export interface ThreadHooks {
+  summaryOf: (mid: string) => ThreadSummary | undefined
+  onOpen: (mid: string) => void
+  /** The crewmate's display name -- the face beside its replies. */
+  crewmateName: string
+}
+
 export interface MessageRenderContext {
   /** Index of this message in `messages`. Needed by rows that look ahead. */
   index: number
@@ -67,6 +79,9 @@ export interface MessageRenderContext {
   autoDeniedIds: Set<string>
   /** Host-injected tool row, kept as a shorthand for replacing the tool entries. */
   renderTool?: (message: ChatMessage) => React.ReactNode
+  /** Reply threads on this transcript's messages (a crewmate's chat). Absent
+   *  on every other surface: no footer, no "Reply in thread" action. */
+  threads?: ThreadHooks
   /** Bubble layout used by conversational rows. `isUser` right-aligns. */
   wrapper: (children: React.ReactNode, isUser?: boolean) => React.ReactNode
   /** Full-width row layout used by cards, pills and banners. */
@@ -93,6 +108,32 @@ export interface MessageRenderer {
 export function formatTs(ts?: string): string | undefined {
   if (!ts) return undefined
   return fmtMessageTime(ts) || undefined
+}
+
+/** The durable id a thread hangs off, or `undefined` for a row that has none
+ *  (a pre-id transcript row cannot carry a thread). */
+export function threadMidOf(m: ChatMessage): string | undefined {
+  const mid = (m.meta as Record<string, unknown> | undefined)?.mid
+  return typeof mid === 'string' && mid ? mid : undefined
+}
+
+/** The footer under a bubble whose thread has replies, or null. `align` follows
+ *  the bubble: the user's sits on the right. */
+export function threadFooterFor(m: ChatMessage, ctx: MessageRenderContext, align: 'start' | 'end'): React.ReactNode {
+  const hooks = ctx.threads
+  const mid = threadMidOf(m)
+  if (!hooks || !mid) return null
+  const summary = hooks.summaryOf(mid)
+  if (!summary || summary.count <= 0) return null
+  return <ThreadFooter summary={summary} crewmateName={hooks.crewmateName} align={align} onOpen={() => hooks.onOpen(mid)} />
+}
+
+/** The row action that opens (or starts) the thread on this message, or undefined. */
+export function replyInThreadFor(m: ChatMessage, ctx: MessageRenderContext): (() => void) | undefined {
+  const hooks = ctx.threads
+  const mid = threadMidOf(m)
+  if (!hooks || !mid) return undefined
+  return () => hooks.onOpen(mid)
 }
 
 /**
@@ -364,13 +405,17 @@ export const defaultMessageRenderers: readonly MessageRenderer[] = [
     // ChatPage. A host that opens files supplies `ctx.onFileOpen`; without it
     // the cards and chips still render, inert.
     render: (m, ctx) => ctx.wrapper(
-      <UserMessage
-        content={m.content}
-        meta={m.meta}
-        timestamp={formatTs(m.ts)}
-        timestampTitle={fmtMessageTimeFull(m.ts)}
-        renderContent={(c, mt) => renderUserContent({ content: c, meta: mt, onFileOpen: ctx.onFileOpen })}
-      />,
+      <>
+        <UserMessage
+          content={m.content}
+          meta={m.meta}
+          timestamp={formatTs(m.ts)}
+          timestampTitle={fmtMessageTimeFull(m.ts)}
+          renderContent={(c, mt) => renderUserContent({ content: c, meta: mt, onFileOpen: ctx.onFileOpen })}
+          onReplyInThread={replyInThreadFor(m, ctx)}
+        />
+        {threadFooterFor(m, ctx, 'end')}
+      </>,
       true,
     ),
   },
@@ -433,7 +478,9 @@ export const defaultMessageRenderers: readonly MessageRenderer[] = [
             decisionsStrip={decisionStripFieldOf(m)}
             fileChanges={(m.meta as Record<string, unknown> | undefined)?.file_changes as FileChangeEntry[] | undefined}
             suppressSteerAck={turnHadPolicyBlock(ctx.messages, ctx.index)}
+            onReplyInThread={isStreaming ? undefined : replyInThreadFor(m, ctx)}
           />
+          {threadFooterFor(m, ctx, 'start')}
         </div>,
       )
     },

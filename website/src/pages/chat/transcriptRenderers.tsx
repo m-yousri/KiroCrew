@@ -48,7 +48,7 @@ import { isSubagentCompletionMessage, type ParsedSubagentCompletion } from './su
 import { REASONING_ROLES, hasReasoningContent } from './groupDisplayItems'
 import { FileCard } from '../../components/FileCard'
 import UserMessage from './UserMessage'
-import { formatTs, type MessageRenderer, type MessageRenderContext } from '../../app-sdk/messageRenderers'
+import { formatTs, replyInThreadFor, threadFooterFor, type MessageRenderer, type MessageRenderContext } from '../../app-sdk/messageRenderers'
 import { renderUserContent } from './ChatPageMessageContent'
 import { fmtMessageTimeFull } from './messageTime'
 import type { ChatMessage } from '../../types'
@@ -392,14 +392,18 @@ export function createTranscriptRenderers(
           id: 'user',
           roles: ['user'],
           render: (m: ChatMessage, ctx: MessageRenderContext) => ctx.wrapper(
-            <UserMessage
-              content={m.content}
-              meta={m.meta}
-              timestamp={formatTs(m.ts)}
-              timestampTitle={fmtMessageTimeFull(m.ts)}
-              renderContent={(c, mt) => renderUserContent({ content: c, meta: mt, onFileOpen: ctx.onFileOpen })}
-              hideSteerBadge
-            />,
+            <>
+              <UserMessage
+                content={m.content}
+                meta={m.meta}
+                timestamp={formatTs(m.ts)}
+                timestampTitle={fmtMessageTimeFull(m.ts)}
+                renderContent={(c, mt) => renderUserContent({ content: c, meta: mt, onFileOpen: ctx.onFileOpen })}
+                hideSteerBadge
+                onReplyInThread={replyInThreadFor(m, ctx)}
+              />
+              {threadFooterFor(m, ctx, 'end')}
+            </>,
             true,
           ),
         } satisfies MessageRenderer]

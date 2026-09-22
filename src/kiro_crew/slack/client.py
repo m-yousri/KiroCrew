@@ -48,10 +48,11 @@ class SlackClientOps(ABC):
         channel: str,
         text: str,
         thread_ts: str | None = None,
-        unfurl_links: bool | None = None,
-        unfurl_media: bool | None = None,
     ) -> str:
-        """Post a message, return its ts."""
+        """Post a message, return its ts. Implementations must never enable
+        Slack link/media unfurls: an unfurl is a zero-click fetch of a URL
+        that may be agent-written (see rfc-redaction-explain-and-reveal §5),
+        which is why the interface deliberately carries no unfurl parameters."""
 
     @abstractmethod
     async def post_blocks(
@@ -60,10 +61,9 @@ class SlackClientOps(ABC):
         blocks: list[dict],
         text: str,
         thread_ts: str | None = None,
-        unfurl_links: bool | None = None,
-        unfurl_media: bool | None = None,
     ) -> str:
-        """Post a Block Kit message, return its ts."""
+        """Post a Block Kit message, return its ts. Same no-unfurl contract
+        as :meth:`post_message`."""
 
     @abstractmethod
     async def update_message(
@@ -334,17 +334,24 @@ class RealSlackClient(SlackClientOps):
         channel: str,
         text: str,
         thread_ts: str | None = None,
-        unfurl_links: bool | None = None,
-        unfurl_media: bool | None = None,
         reply_broadcast: bool | None = None,
     ) -> str:
+        """Post a message with link/media previews always OFF.
+
+        Bot-posted text routinely carries agent-written URLs, and a Slack
+        unfurl is a zero-click fetch: Slack requests the URL without anyone
+        tapping it, so a URL whose query smuggles conversation data exfiltrates
+        on delivery. There is deliberately NO opt-in parameter: every caller of
+        this client is reachable from agent-authored content (the send_message
+        tool, cron notifications, approval cards), so a flag here would hand a
+        prompt-injected agent the one bit it needs to re-enable the fetch. See
+        docs/request-for-change/rfc-redaction-explain-and-reveal.md §5.
+        """
         kwargs: dict[str, Any] = {"channel": channel, "text": text}
         if thread_ts is not None:
             kwargs["thread_ts"] = thread_ts
-        if unfurl_links is not None:
-            kwargs["unfurl_links"] = unfurl_links
-        if unfurl_media is not None:
-            kwargs["unfurl_media"] = unfurl_media
+        kwargs["unfurl_links"] = False
+        kwargs["unfurl_media"] = False
         if reply_broadcast and thread_ts is not None:
             kwargs["reply_broadcast"] = True
         self._inject_team(channel, kwargs)
@@ -357,17 +364,20 @@ class RealSlackClient(SlackClientOps):
         blocks: list[dict],
         text: str,
         thread_ts: str | None = None,
-        unfurl_links: bool | None = None,
-        unfurl_media: bool | None = None,
         reply_broadcast: bool | None = None,
     ) -> str:
+        """Post Block Kit content with text/link unfurls always OFF.
+
+        Agent-supplied server-fetched media fields are refused at the dashboard
+        messaging boundary before reaching this client. The profile
+        ``image_url`` returned by :meth:`get_user_profile` is read-only metadata,
+        not outbound Block Kit, so it is unaffected.
+        """
         kwargs: dict[str, Any] = {"channel": channel, "blocks": blocks, "text": text}
         if thread_ts is not None:
             kwargs["thread_ts"] = thread_ts
-        if unfurl_links is not None:
-            kwargs["unfurl_links"] = unfurl_links
-        if unfurl_media is not None:
-            kwargs["unfurl_media"] = unfurl_media
+        kwargs["unfurl_links"] = False
+        kwargs["unfurl_media"] = False
         if reply_broadcast and thread_ts is not None:
             kwargs["reply_broadcast"] = True
         self._inject_team(channel, kwargs)

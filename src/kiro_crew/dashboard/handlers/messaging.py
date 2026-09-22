@@ -1701,6 +1701,30 @@ async def api_notification_agent_push(request: web.Request) -> web.Response:
 _MAX_BLOCKS = 50  # Slack Block Kit limit
 _MAX_WALK_DEPTH = 10  # defense-in-depth against deeply nested LLM output
 
+#: Block Kit fields that make Slack fetch media server-side. Agent-supplied
+#: blocks never carry them: unlike ordinary link unfurls, these fetches are not
+#: controlled by ``unfurl_media=False``. The ``image_url`` returned by
+#: ``slack/client.py::get_user_profile`` is read-only profile metadata, not an
+#: outbound Block Kit tree, so this send boundary does not affect it.
+_BLOCK_REMOTE_MEDIA_KEYS = frozenset({"image_url", "thumbnail_url", "video_url"})
+_BLOCK_REMOTE_MEDIA_TYPES = frozenset({"image", "video"})
+
+
+def _blocks_request_remote_media(blocks: list[dict]) -> bool:
+    """Whether an agent-supplied Block Kit tree can make Slack fetch media."""
+    pending: list[Any] = list(blocks)
+    while pending:
+        obj = pending.pop()
+        if isinstance(obj, dict):
+            if any(key in _BLOCK_REMOTE_MEDIA_KEYS for key in obj):
+                return True
+            if obj.get("type") in _BLOCK_REMOTE_MEDIA_TYPES:
+                return True
+            pending.extend(obj.values())
+        elif isinstance(obj, list):
+            pending.extend(obj)
+    return False
+
 
 def _redact_all(value: str) -> str:
     """Both outbound redactors as one callable, in the canonical order.
@@ -2346,6 +2370,18 @@ async def api_send_message(request: web.Request) -> web.Response:
     blocks = body.get("blocks")
     if blocks and not isinstance(blocks, list):
         return web.json_response({"error": "blocks must be an array"}, status=400)
+    if isinstance(blocks, list) and _blocks_request_remote_media(blocks):
+        return web.json_response(
+            {
+                "error": (
+                    "agent-supplied Block Kit cannot contain image/video blocks "
+                    "or image_url/thumbnail_url/video_url fields because Slack "
+                    "fetches that media without a recipient click"
+                ),
+                "code": "blocks_remote_media_disabled",
+            },
+            status=400,
+        )
 
     # ── Channel-addressed leg ──
     # Handled before the Slack-shaped validation below, because a Webex room id is
@@ -2424,6 +2460,25 @@ async def api_send_message(request: web.Request) -> web.Response:
     ):
         return web.json_response(
             {"error": "unfurl_links and unfurl_media must be booleans"}, status=400
+        )
+    # Refused, not silently dropped (same posture as _SLACK_ONLY_BODY_FIELDS):
+    # this endpoint is reachable from agent-authored tool calls, and a Slack
+    # unfurl is a zero-click fetch of a possibly agent-written URL, so an
+    # explicit ``true`` is the one bit a prompt-injected agent needs to
+    # re-enable the exfiltration channel. ``false``/absent are accepted for
+    # backward compatibility — they ask for what is now always the case.
+    # See docs/request-for-change/rfc-redaction-explain-and-reveal.md §5.
+    if unfurl_links or unfurl_media:
+        return web.json_response(
+            {
+                "error": (
+                    "unfurl_links/unfurl_media cannot be enabled: bot posts "
+                    "never fetch link or media previews (a preview is a "
+                    "zero-click request of a possibly agent-written URL)"
+                ),
+                "code": "unfurl_disabled",
+            },
+            status=400,
         )
 
     thread_ts = body.get("thread_ts")
@@ -2852,8 +2907,6 @@ async def api_send_message(request: web.Request) -> web.Response:
                                 blocks,
                                 text,
                                 thread_ts=thread_ts,
-                                unfurl_links=unfurl_links,
-                                unfurl_media=unfurl_media,
                                 reply_broadcast=reply_broadcast,
                             )
                         else:
@@ -2861,8 +2914,6 @@ async def api_send_message(request: web.Request) -> web.Response:
                                 channel,
                                 text,
                                 thread_ts=thread_ts,
-                                unfurl_links=unfurl_links,
-                                unfurl_media=unfurl_media,
                                 reply_broadcast=reply_broadcast,
                             )
                             if options:
@@ -3302,6 +3353,22 @@ async def api_update_message(request: web.Request) -> web.Response:
     if blocks is not None and not isinstance(blocks, list):
         return web.json_response(
             {"error": "blocks must be a list", "code": "invalid_blocks"}, status=400
+        )
+    # The edit path publishes replacement content, so it carries the SAME
+    # server-fetched-media boundary as api_send_message: without this, an
+    # agent could send clean blocks and then EDIT remote media into the
+    # message — Slack fetches Block Kit media regardless of unfurl flags.
+    if isinstance(blocks, list) and _blocks_request_remote_media(blocks):
+        return web.json_response(
+            {
+                "error": (
+                    "agent-supplied Block Kit cannot contain image/video blocks "
+                    "or image_url/thumbnail_url/video_url fields because Slack "
+                    "fetches that media without a recipient click"
+                ),
+                "code": "blocks_remote_media_disabled",
+            },
+            status=400,
         )
     if not text and not blocks:
         return web.json_response(

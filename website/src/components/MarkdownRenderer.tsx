@@ -5,7 +5,7 @@ import React, { createContext, useContext, memo, useEffect, useMemo, useRef, use
 import Clickable from './Clickable'
 import { HOVER_NONE_ACTIONS_ROW_CLS } from '../utils/touchActions'
 import { getImageDims, rememberImageDims } from '../utils/imageDims'
-import { X, Download, Loader2, MoreHorizontal, Plus, Minus, Search, Folder, Maximize2, Check, FileCode, FileSpreadsheet, Copy, Image as ImageIcon, ImageOff, GitPullRequest, MessageSquare, ExternalLink } from 'lucide-react'
+import { X, Download, Loader2, MoreHorizontal, Plus, Minus, Search, Folder, Maximize2, Check, FileCode, FileSpreadsheet, Copy, Image as ImageIcon, ImageOff, Film, Volume2, GitPullRequest, MessageSquare, ExternalLink } from 'lucide-react'
 import { copyCode, copyToClipboard } from '../utils/clipboard'
 import { capWhitespaceRuns, remarkBoundDepth, rehypeBoundRawDepth } from '../utils/markdownDepthBound'
 import { hastTableToCsv, hastTableToMarkdown } from '../utils/tableClipboard'
@@ -321,6 +321,20 @@ export const BasePathCtx = createContext<string | null>(null)
  * images keep the full inline size. Default false = full size.
  */
 export const CompactImagesCtx = createContext<boolean>(false)
+
+/**
+ * REMOTE (http/https) markdown images always render as click-to-load
+ * placeholders instead of fetching automatically. Agent-written markdown is
+ * untrusted, and an auto-loading `<img src="https://…?d=<data>">` is a
+ * zero-click request — the browser sends it the moment the message renders, so
+ * prompt-injected content could exfiltrate conversation data through the URL
+ * with nobody clicking anything. The placeholder keeps the destination host
+ * visible and loads only on the user's explicit click. Local images
+ * (`/api/file-raw` same-origin reads of files on this machine) are unaffected —
+ * they make no outbound request. Deferral is UNCONDITIONAL: there is no
+ * context, prop, or flag through which any caller could disable it. See
+ * docs/request-for-change/rfc-redaction-explain-and-reveal.md §5.
+ */
 
 /**
  * A per-message token appended to local image URLs.
@@ -2044,6 +2058,9 @@ const MD_COMPONENTS: Components = {
   strong({ node, children }) { return <strong {...sp(node)} className="font-semibold text-text-strong">{children}</strong> },
   em({ node, children }) { return <em {...sp(node)} className="italic">{children}</em> },
   img: ImgWithFallback,
+  video({ node, children }) { return <DeferredMedia tag="video" node={node}>{children}</DeferredMedia> },
+  audio({ node, children }) { return <DeferredMedia tag="audio" node={node}>{children}</DeferredMedia> },
+  source: MdSourceEl,
 }
 
 /** Markdown image with a React-rendered fallback chip when the URL is broken
@@ -2158,6 +2175,51 @@ export function pendingImageBoxStyle(compact: boolean): React.CSSProperties {
   return compact ? { width: '240px', height: '180px' } : { width: '420px', height: '236px' }
 }
 
+function remoteHost(value: string): string {
+  try { return new URL(value, window.location.href).host } catch { return value }
+}
+
+/** Hosts shown to the user are derived from the same remote URL collection
+ * that controls the gate and approval scope. Preserve first-seen order while
+ * removing duplicate hosts. */
+function distinctHosts(remotes: readonly string[]): string[] {
+  return [...new Set(remotes.map(remoteHost))]
+}
+
+function RemoteHostList({ remotes }: { remotes: readonly string[] }) {
+  const hosts = distinctHosts(remotes)
+  return (
+    <span className="inline-flex max-w-full flex-wrap items-center gap-x-1 font-mono text-[12px] font-medium text-text">
+      {hosts.map((host, index) => (
+        <React.Fragment key={`${host}-${index}`}>
+          {index > 0 && <span aria-hidden="true">,</span>}
+          <span className="break-all">{host}</span>
+        </React.Fragment>
+      ))}
+    </span>
+  )
+}
+
+function RemoteMediaDisclosure({ description, hostCount }: { description?: string; hostCount: number }) {
+  return (
+    <>
+      <span className="mt-0.5 block basis-full text-start text-[11px] leading-relaxed text-muted">
+        {i18nT(hostCount > 1
+          ? 'components.markdownRenderer.remote_media_loads_once_plural'
+          : 'components.markdownRenderer.remote_media_loads_once')}
+      </span>
+      <span className="block basis-full text-start text-[11px] leading-relaxed text-muted">
+        {i18nT('components.markdownRenderer.remote_media_others_blocked')}
+      </span>
+      {description && (
+        <span className="block basis-full text-start text-[11px] leading-relaxed text-muted">
+          {i18nT('components.markdownRenderer.remote_media_model_description', { description })}
+        </span>
+      )}
+    </>
+  )
+}
+
 function ImgWithFallback({
   node,
   src,
@@ -2166,6 +2228,10 @@ function ImgWithFallback({
 }: React.ImgHTMLAttributes<HTMLImageElement> & ExtraProps) {
   const [errored, setErrored] = useState(false)
   const [loaded, setLoaded] = useState(false)
+  // A remote image the user explicitly chose to load.
+  // Per-src like the outcome flags: a reused instance handed a different src
+  // must not inherit the previous image's approval.
+  const [remoteApproved, setRemoteApproved] = useState(false)
   // Both flags describe the outcome of loading THIS `src`, so neither may
   // outlive it. React reuses an instance whenever the element at a key keeps its
   // type, so a reused image can be handed a different `src`; without this a good
@@ -2179,6 +2245,7 @@ function ImgWithFallback({
     setOutcomeSrc(src)
     setErrored(false)
     setLoaded(false)
+    setRemoteApproved(false)
   }
   const basePath = useContext(BasePathCtx)
   const compact = useContext(CompactImagesCtx)
@@ -2190,8 +2257,12 @@ function ImgWithFallback({
   // /api/file-raw the same way; it must NOT take the basePath-relative branch
   // below, which is only for genuinely relative paths (issue #3497).
   const isWinAbs = WINDOWS_ABS_PATH_RE.test(src)
-  const isLocal = src.startsWith('/') || src.startsWith('~') || src.startsWith('.') || isWinAbs
-    || (basePath && !src.startsWith('http'))
+  // Root-relative gateway routes are URLs, not on-disk paths. Keeping them
+  // out of the file-path rewrite lets the media gate defer proxy endpoints
+  // while allowing only its explicit local-bytes routes through.
+  const isGatewayRoute = src.startsWith('/api/')
+  const isLocal = (!isGatewayRoute && (src.startsWith('/') || src.startsWith('~') || src.startsWith('.') || isWinAbs))
+    || (basePath && !src.startsWith('http') && !isGatewayRoute)
   let url: string
   // The on-disk path the backend is asked to read — what the broken-image
   // fallback discloses and copies. Stays `src` verbatim for remote URLs.
@@ -2224,6 +2295,23 @@ function ImgWithFallback({
     if (version) url += `&v=${encodeURIComponent(version)}`
   } else {
     url = src
+  }
+  if (isRemoteMediaUrl(url) && !remoteApproved) {
+    return (
+      <button
+        type="button"
+        onClick={(e) => { e.preventDefault(); e.stopPropagation(); setRemoteApproved(true) }}
+        title={src}
+        className="group inline-flex max-w-full flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-border bg-bg-elevated px-2.5 py-1.5 text-sm text-muted cursor-pointer transition-colors hover:border-border-strong hover:bg-bg-hover"
+      >
+        <ImageIcon size={14} aria-hidden="true" className="shrink-0" />
+        <RemoteHostList remotes={[src]} />
+        <span className="font-medium text-text transition-colors group-hover:text-accent">
+          {i18nT('components.markdownRenderer.remote_image_click_to_load')}
+        </span>
+        <RemoteMediaDisclosure description={alt || undefined} hostCount={1} />
+      </button>
+    )
   }
   if (errored) {
     return <BrokenImage path={diskPath} alt={alt} probeUrl={isLocal ? url : undefined} />
@@ -2342,6 +2430,142 @@ function ImgWithFallback({
       />
     </span>
   )
+}
+
+/** Same-origin routes proven to serve local media bytes without proxying a
+ *  model-selected remote URL. Keep this list narrow: every other http(s) URL,
+ *  including same-origin gateway routes such as `/api/link-meta`, is deferred. */
+const SAFE_LOCAL_MEDIA_PATH_PREFIXES = ['/api/file-raw'] as const
+
+/** True for an http(s) media URL that must wait for an explicit click.
+ *  Classified with the browser's own URL parser (`new URL(value,
+ *  location.href)`) rather than a hand-written prefix check, because the fetch
+ *  will use that parser too. Cross-origin URLs always defer. Same-origin URLs
+ *  also defer unless their pathname is an explicitly allowlisted local-bytes
+ *  route. Non-http(s) schemes make no request and are left to the markdown URL
+ *  transform's existing policy. */
+function isRemoteMediaUrl(value: unknown): boolean {
+  if (typeof value !== 'string') return false
+  const s = value.trim()
+  if (!s) return false
+  let u: URL
+  try { u = new URL(s, window.location.href) } catch { return false }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return false
+  if (u.origin !== window.location.origin) return true
+  return !SAFE_LOCAL_MEDIA_PATH_PREFIXES.some(prefix =>
+    u.pathname === prefix || u.pathname.startsWith(`${prefix}/`),
+  )
+}
+
+/** `srcset` is a comma-separated candidate list (`a.webp 1x, b.webp 2x`), so
+ *  it is checked per candidate — a remote SECOND candidate must not hide
+ *  behind a local first one. Splitting on whitespace AND commas over-splits a
+ *  URL that itself contains a comma, but every fragment is still URL-tested,
+ *  so over-splitting can only classify MORE values as remote, never fewer. */
+function srcsetHasRemote(value: unknown): boolean {
+  if (typeof value !== 'string') return false
+  return value.split(/[\s,]+/).some(isRemoteMediaUrl)
+}
+
+/** Approval scope for a media element's children: a `<source>` inside a
+ *  video/audio the user clicked to load may render; one outside stays
+ *  dropped. See DeferredMedia. */
+const MediaApprovedCtx = createContext<boolean>(false)
+
+/** `<video>` / `<audio>` under the unconditional remote-media deferral.
+ *
+ *  The image deferral (ImgWithFallback) covers only `img`, but the sanitizer's
+ *  tag allowlist also admits raw-HTML `video`/`audio`/`source`, whose `src`,
+ *  `poster` and child-source URLs the browser fetches on mount — `poster`
+ *  unconditionally, `src` per `preload`. An agent-written
+ *  `<video poster="https://…?d=<data>">` would therefore be the same
+ *  zero-click request the img gate exists to stop. So a media element that
+ *  references ANY remote URL renders as the same click-to-load chip, and only
+ *  the user's click mounts the native element (children included, via
+ *  MediaApprovedCtx). Media with only non-remote references mounts directly.
+ */
+function remoteSrcsetUrls(value: unknown): string[] {
+  if (typeof value !== 'string') return []
+  return value
+    .split(',')
+    .map(candidate => candidate.trim().split(/\s+/, 1)[0])
+    .filter(isRemoteMediaUrl)
+}
+
+function collectRemotes(node?: HastElement): string[] {
+  const props = node?.properties ?? {}
+  const remotes: string[] = []
+  for (const key of ['src', 'poster']) {
+    const value = props[key]
+    if (isRemoteMediaUrl(value)) remotes.push(String(value))
+  }
+  for (const child of node?.children ?? []) {
+    if (child.type !== 'element' || child.tagName !== 'source') continue
+    const src = child.properties?.src
+    if (isRemoteMediaUrl(src)) remotes.push(String(src))
+    remotes.push(...remoteSrcsetUrls(child.properties?.srcSet))
+  }
+  return remotes
+}
+
+function DeferredMedia({ tag, node, children }: { tag: 'video' | 'audio'; node?: HastElement; children?: React.ReactNode }) {
+  const [approved, setApproved] = useState(false)
+  const props = node?.properties ?? {}
+  // One collection controls whether the gate renders, exactly what an approval
+  // unlocks, its reset signature, and every host disclosed on the button.
+  const remotes = collectRemotes(node)
+  const description = [props.alt, props.title, props.ariaLabel]
+    .find(value => typeof value === 'string' && value.trim()) as string | undefined
+  // Approval belongs to THIS set of remote URLs, so it must not outlive it.
+  // React reuses the instance at a stable render position (a streaming
+  // message re-renders in place), so a media element the user approved for
+  // URL X that is then swapped to URL Y would otherwise mount Y with no
+  // click — the exact zero-click fetch this gate exists to stop. Same
+  // render-time bail-out pattern as ImgWithFallback's outcomeSrc reset.
+  const sig = remotes.join('\n')
+  const [approvedSig, setApprovedSig] = useState(sig)
+  if (approvedSig !== sig) {
+    setApprovedSig(sig)
+    setApproved(false)
+  }
+  if (!approved && remotes.length > 0) {
+    return (
+      <button
+        type="button"
+        onClick={(e) => { e.preventDefault(); e.stopPropagation(); setApproved(true) }}
+        title={remotes.join('\n')}
+        className="group inline-flex max-w-full flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-border bg-bg-elevated px-2.5 py-1.5 text-sm text-muted cursor-pointer transition-colors hover:border-border-strong hover:bg-bg-hover"
+      >
+        {tag === 'video'
+          ? <Film size={14} aria-hidden="true" className="shrink-0" />
+          : <Volume2 size={14} aria-hidden="true" className="shrink-0" />}
+        <RemoteHostList remotes={remotes} />
+        <span className="font-medium text-text transition-colors group-hover:text-accent">
+          {i18nT('components.markdownRenderer.remote_media_click_to_load')}
+        </span>
+        <RemoteMediaDisclosure description={description} hostCount={distinctHosts(remotes).length} />
+      </button>
+    )
+  }
+  const El = tag
+  return (
+    <MediaApprovedCtx.Provider value={true}>
+      <El {...spa(tag, node)}>{children}</El>
+    </MediaApprovedCtx.Provider>
+  )
+}
+
+/** `<source>` under the unconditional remote-media deferral: a remote source may render only
+ *  inside a media element the user approved (MediaApprovedCtx). A stray or
+ *  `<picture>`-hosted remote source is dropped — the sibling `<img>` already
+ *  goes through ImgWithFallback's own gate, and a `srcset` swap must not
+ *  smuggle an ungated remote fetch past it. */
+function MdSourceEl({ node }: { node?: HastElement }) {
+  const approved = useContext(MediaApprovedCtx)
+  const props = node?.properties ?? {}
+  const remote = isRemoteMediaUrl(props.src) || srcsetHasRemote(props.srcSet)
+  if (!approved && remote) return null
+  return <source {...spa('source', node)} />
 }
 
 // Disable single-$ inline math so currency strings like `$9.99` don't
@@ -4521,6 +4745,7 @@ export default memo(function MarkdownRenderer({ content, streaming = false, onFi
           lightbox scoping on the div above is unaffected) and lives in this module
           so a caller that mocks it in tests never needs to re-export the context. */}
       <CompactImagesCtx.Provider value={compactImages}>
+      {/* Remote media is always click-to-load; deferral is unconditional inline. */}
       {/* ImageVersionCtx: scopes local image URLs to this message so an agent
           rewriting one file across turns is not served the previous bytes from
           the in-document resource cache. */}

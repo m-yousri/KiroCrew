@@ -206,3 +206,50 @@ class TestFileDownloadGuards:
         dest = tmp_path / "out"
         await self._client().download_file("https://files-edge.slack.com/x.png", str(dest))
         assert dest.read_bytes() == b"X"
+
+
+class TestUnfurlAlwaysOff:
+    """Bot posts must never trigger Slack link/media previews. An unfurl is a
+    zero-click fetch of an agent-written URL, and every caller of this client
+    is reachable from agent-authored content (the send_message tool, cron
+    notifications), so the interface deliberately carries NO opt-in parameter —
+    a flag would hand a prompt-injected agent the one bit it needs to
+    re-enable the fetch. See
+    docs/request-for-change/rfc-redaction-explain-and-reveal.md §5."""
+
+    def _client(self) -> tuple[RealSlackClient, list[dict[str, Any]]]:
+        calls: list[dict[str, Any]] = []
+
+        async def _post(**kwargs: Any) -> dict[str, str]:
+            calls.append(kwargs)
+            return {"ts": "1712793600.000100"}
+
+        client = RealSlackClient.__new__(RealSlackClient)
+        client._web = SimpleNamespace(chat_postMessage=_post)
+        return client, calls
+
+    @pytest.mark.asyncio
+    async def test_post_message_sends_unfurl_off(self) -> None:
+        client, calls = self._client()
+        await client.post_message("C1", "see https://example.com/?q=x")
+        assert calls[0]["unfurl_links"] is False
+        assert calls[0]["unfurl_media"] is False
+
+    @pytest.mark.asyncio
+    async def test_post_blocks_sends_unfurl_off(self) -> None:
+        client, calls = self._client()
+        await client.post_blocks("C1", [{"type": "section"}], "fallback")
+        assert calls[0]["unfurl_links"] is False
+        assert calls[0]["unfurl_media"] is False
+
+    @pytest.mark.asyncio
+    async def test_no_opt_in_parameter_exists(self) -> None:
+        """The absence of the parameter IS the control: with no ``unfurl_*``
+        kwarg on the client, no forwarding caller (the send_message handler,
+        an app backend) can be talked into re-enabling the fetch."""
+        import inspect
+
+        for method in (RealSlackClient.post_message, RealSlackClient.post_blocks):
+            params = inspect.signature(method).parameters
+            assert "unfurl_links" not in params
+            assert "unfurl_media" not in params

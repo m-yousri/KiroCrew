@@ -70,6 +70,13 @@ def register(app: web.Application) -> None:
     app.router.add_get("/api/members/{slug}/activity", handlers.api_member_activity)
     app.router.add_get("/api/members/{slug}/rules", handlers.api_member_rules_get)
     app.router.add_put("/api/members/{slug}/rules", handlers.api_member_rules_put)
+    # Crewmate teams (a name + an ordered member list; the Crewmates page's
+    # roster grouping and team view). Same dashboard-only posture as the
+    # members routes; the writes are owner actions.
+    app.router.add_get("/api/teams", handlers.api_teams_list)
+    app.router.add_post("/api/teams", handlers.api_teams_create)
+    app.router.add_put("/api/teams/{id}", handlers.api_teams_update)
+    app.router.add_delete("/api/teams/{id}", handlers.api_teams_delete)
 
     # Crew appearance library: the dashboard's own pack store, separate from
     # Crew Companion's. On the dashboard router so a crew's face renders while

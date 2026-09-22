@@ -500,6 +500,12 @@ _CREW_SECRET_LEAVES: list[str] = [
     # the OS-sandbox counterpart is ``sandbox._CREW_HIDDEN_LEAVES``. Only the
     # gateway opens the path.
     "tag-grants",
+    # Crewmate teams (``crew_teams.py``): the owner's grouping of the roster. Not
+    # a secret, but it decides which team view a crewmate's questions and work
+    # roll up into, and a crewmate must not be able to move itself or a sibling.
+    # Whole directory (``atomic_write`` temp sibling); the OS-sandbox counterpart
+    # is ``sandbox._CREW_HIDDEN_LEAVES``. Only the gateway opens the path.
+    "crew-teams",
     # The operator's OAuth consent-endpoint extension
     # ({additional_authorization_endpoints: [{host, path}]}). Each entry widens
     # the banner-only OAuth entropy carve-out (_OAUTH_AUTHORIZATION_ENDPOINTS),

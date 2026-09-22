@@ -20,7 +20,9 @@ from typing import Any
 
 from aiohttp import BodyPartReader, web
 
-from kiro_crew import agent_state, model_registry, model_scope
+from kiro_crew import agent_state
+from kiro_crew import crew_teams as teams_mod
+from kiro_crew import model_registry, model_scope
 from kiro_crew.acp.client import advertised_model_ids, model_is_unusable
 from kiro_crew.acp_backends import (
     ACP_BACKEND_CLAUDE,
@@ -4325,8 +4327,12 @@ async def _do_agents_sync(request: web.Request) -> web.Response:
             # asyncio lock while the worker is mid-write.
             to_add = {n: cfg.agents[n] for n in synced if n in cfg.agents}
 
-            def _write_sync() -> list[str]:
+            def _write_sync() -> tuple[list[str], list[str]]:
                 retired_stores: list[str] = []
+                # The names _mutate REALLY deleted -- a subset of the snapshot
+                # candidates, because an entry edited between the snapshot and
+                # the lock hold survives (see the comment inside _mutate).
+                deleted_names: list[str] = []
 
                 def _mutate(doc: dict) -> dict | None:
                     agents = coerce_dict_section(doc, "agents")
@@ -4353,6 +4359,7 @@ async def _do_agents_sync(request: web.Request) -> web.Response:
                                     )
                                 retired_stores.append(store_name)
                             del agents[aname]
+                            deleted_names.append(aname)
                             changed = True
                     return doc if changed else None
 
@@ -4362,9 +4369,15 @@ async def _do_agents_sync(request: web.Request) -> web.Response:
 
                 for store_name in retired_stores:
                     release_cached_memory_store(store_name)
-                return retired_stores
+                return retired_stores, deleted_names
 
-            retired_stores = await _drained_to_thread(_write_sync)
+            retired_stores, deleted_names = await _drained_to_thread(_write_sync)
+            # A pruned package agent may be on a team; drop it like the delete
+            # route does. ONLY the names _mutate deleted -- a snapshot candidate
+            # that survived (edited concurrently) keeps its team. Best-effort:
+            # the list route reconciles against the registry anyway.
+            for deleted_name in deleted_names:
+                await _drained_to_thread(teams_mod.drop_member, deleted_name)
             if (state := request.app.get("state")) is not None:
                 from kiro_crew.dashboard.handlers._shared import release_markdown_memory_store
 
@@ -5449,6 +5462,13 @@ async def api_kirocrew_agent_delete(request: web.Request) -> web.Response:
             clear_list_agents_cache()
             if (state := request.app.get("state")) is not None:
                 state.push_refresh("agents")
+        # A team that still lists the gone crew would count a crewmate with no
+        # roster row. INSIDE the config lock: the team routes validate members
+        # against a config snapshot under this same lock, so a create cannot
+        # interleave between the removal above and this drop and re-add the
+        # crew to a team. Best-effort: a failed drop never fails the delete the
+        # config write already committed.
+        await _drained_to_thread(teams_mod.drop_member, name)
     # A crew DISAPPEARING is the other half of the same invariant: the captured
     # config still holds the record, so a cron or messaging job still naming the
     # crew would keep resolving its old pin and binding.

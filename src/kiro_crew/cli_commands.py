@@ -1353,6 +1353,11 @@ def _handle_agent(args: argparse.Namespace) -> None:
 
         with memory_store_namespace_lock():
             _locked_config_write(_mutate_agent_delete)
+        # Drop the crew from its team, as the dashboard delete does. Best-effort:
+        # the /api/teams list reconciles against the registry on every read.
+        from kiro_crew import crew_teams
+
+        crew_teams.drop_member(args.name)
         print(f"Deleted agent: {args.name}")
 
     elif action == "reset-model":

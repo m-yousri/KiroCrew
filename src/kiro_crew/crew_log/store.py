@@ -55,6 +55,7 @@ import logging
 import os
 import shutil
 import time
+import traceback
 import weakref
 from collections import deque
 from collections.abc import Callable, Collection, Iterator
@@ -2523,10 +2524,14 @@ def _mkdir_private(directory: Path) -> None:
         key = str(directory)
         if key not in _restrict_failed:
             _restrict_failed.add(key)
+            # The traceback rendered to text, not ``exc_info``: this runs inside
+            # ``CrewLog.append``, so the traceback's frames hold the handle, and a
+            # handler that keeps records would keep the handle -- and its write
+            # lease -- alive with the record (see ``emit._run_job``).
             logger.warning(
-                "Cannot restrict %s to owner-only; it may be readable by other users",
+                "Cannot restrict %s to owner-only; it may be readable by other users\n%s",
                 directory,
-                exc_info=True,
+                traceback.format_exc().rstrip(),
             )
 
 

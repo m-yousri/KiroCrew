@@ -940,12 +940,13 @@ class TestAdapters:
         # The response also carries ``cloudDeploymentEnabled`` so the frontend can
         # hide the console when the platform withholds cloud deployment; the public
         # default admits it. Asserted as a superset so a future additive field does
-        # not break this test again.
-        assert _payload(resp) == {
-            "profile": "p",
-            "region": "eu-west-1",
-            "cloudDeploymentEnabled": True,
-        }
+        # not break this test again — which the previous exact-equality assertion
+        # did on the very next additive field (``reaperInstallScript``, the resolved
+        # auto-cleanup install command the setup guide renders).
+        payload = _payload(resp)
+        assert payload["profile"] == "p"
+        assert payload["region"] == "eu-west-1"
+        assert payload["cloudDeploymentEnabled"] is True
 
     @pytest.mark.asyncio
     async def test_deny_restricted_without_app_context(self):

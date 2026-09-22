@@ -8827,6 +8827,13 @@
       "label": "modifications : redémarrage requis",
       "tooltip": "Ce réglage ne peut pas changer pendant que {{productName}} est en cours d'exécution. La valeur enregistrée est conservée et s'applique au prochain redémarrage de {{productName}} (Réglages → À propos, ou le terminal depuis lequel vous l'avez lancé).",
       "schema_unavailable": "Impossible de vérifier si ce réglage nécessite un redémarrage."
+    },
+    "directDeploy": {
+      "deploy_via_agent": "Déployer via l'agent",
+      "deploy_as_permanent": "Déployer en permanent",
+      "ttl_permanent": "Permanent (sans expiration)",
+      "ttl_expires_in_hours": "Expire dans {{hours}} heures",
+      "deploys_from_here_confirm_gated": "déploie depuis ici — vous confirmez d'abord"
     }
   },
   "hooks": {
@@ -9278,7 +9285,6 @@
       "deploy": "Déployer",
       "deploy_anyway": "Déployer quand même",
       "deploy_artifact": "Déployer {{name}}",
-      "deploy_opens_a_new_chat_session_that_runs_the_ar": "Déployer ouvre une nouvelle session de chat qui exécute la compétence artifact-deploy avec le profil choisi.",
       "deploy_profile_for_slug": "Profil de déploiement pour {{slug}}",
       "deploy_recall_destroy_each_require_explicit_conf": "Déployer / Retirer / Détruire nécessitent chacun une confirmation explicite\n              (jamais approuvée automatiquement) et émettent un événement d'audit SEL.",
       "deployments_count": "Déploiements ({{count}})",
@@ -9394,7 +9400,10 @@
       "remove_profile_title": "Retirer le profil ?",
       "remove_profile_button": "Retirer le profil",
       "retry": "Réessayer",
-      "profile_errors_title": "Certains profils n'ont pas pu être listés"
+      "profile_errors_title": "Certains profils n'ont pas pu être listés",
+      "4_optional_install_auto_cleanup": "4. Facultatif : installer le nettoyage automatique",
+      "auto_cleanup_explainer": "Nécessaire uniquement pour les déploiements censés expirer d'eux-mêmes. Sinon, déployez en permanent et supprimez-le via Recall ou Destroy.",
+      "deploy_publishes_directly_from_this_page": "Deploy publie depuis cette page après votre confirmation. Les applications à préparer ouvrent plutôt une session de déploiement avec l'agent."
     },
     "artifactDetailPage": {
       "a_newer_version_is_available_in_the_remote_copy": "· une version plus récente est disponible dans la copie distante",

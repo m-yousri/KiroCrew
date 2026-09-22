@@ -8710,6 +8710,13 @@
       "label": "बदलाव के लिए पुनः आरंभ ज़रूरी",
       "tooltip": "{{productName}} चलते समय यह सेटिंग बदली नहीं जा सकती। सहेजा गया मान बना रहता है और {{productName}} के अगले पुनः आरंभ पर लागू होगा (सेटिंग्स → परिचय, या वह टर्मिनल जहाँ से तुमने इसे चलाया)।",
       "schema_unavailable": "यह जाँच नहीं हो सकी कि इस सेटिंग के लिए पुनः आरंभ आवश्यक है या नहीं।"
+    },
+    "directDeploy": {
+      "deploy_via_agent": "एजेंट के ज़रिए डिप्लॉय करें",
+      "deploy_as_permanent": "स्थायी रूप से डिप्लॉय करें",
+      "ttl_permanent": "स्थायी (कोई समय-सीमा नहीं)",
+      "ttl_expires_in_hours": "{{hours}} घंटे में समाप्त",
+      "deploys_from_here_confirm_gated": "यहीं से डिप्लॉय होता है — पहले आप पुष्टि करें"
     }
   },
   "hooks": {
@@ -9152,7 +9159,6 @@
       "deploy": "तैनात करें",
       "deploy_anyway": "फिर भी डिप्लॉय करें",
       "deploy_artifact": "{{name}} डिप्लॉय करें",
-      "deploy_opens_a_new_chat_session_that_runs_the_ar": "तैनात करें, चुनी गई प्रोफ़ाइल के साथ artifact-deploy स्किल चलाने वाला एक नया चैट सेशन खोलता है।",
       "deploy_profile_for_slug": "{{slug}} के लिए तैनाती प्रोफ़ाइल",
       "deploy_recall_destroy_each_require_explicit_conf": "तैनात करें / वापस लें / नष्ट करें — हर एक के लिए स्पष्ट पुष्टि आवश्यक है\n              (कभी स्वतः स्वीकृत नहीं) और हर एक SEL ऑडिट इवेंट दर्ज करता है।",
       "deployments_count": "तैनातियाँ ({{count}})",
@@ -9266,7 +9272,10 @@
       "remove_profile_title": "प्रोफ़ाइल हटाएँ?",
       "remove_profile_button": "प्रोफ़ाइल हटाएँ",
       "retry": "फिर कोशिश करें",
-      "profile_errors_title": "कुछ प्रोफ़ाइल सूचीबद्ध नहीं हो सकीं"
+      "profile_errors_title": "कुछ प्रोफ़ाइल सूचीबद्ध नहीं हो सकीं",
+      "4_optional_install_auto_cleanup": "4. वैकल्पिक: ऑटो-क्लीनअप इंस्टॉल करें",
+      "auto_cleanup_explainer": "केवल उन डिप्लॉय के लिए ज़रूरी है जिन्हें आप स्वयं समाप्त होने देना चाहते हैं। इसके बिना स्थायी रूप से डिप्लॉय करें और Recall या Destroy से स्वयं हटाएँ।",
+      "deploy_publishes_directly_from_this_page": "पुष्टि के बाद Deploy इसी पेज से प्रकाशित करता है। जिन ऐप्स को तैयारी चाहिए, वे एजेंट के साथ डिप्लॉय सेशन खोलते हैं।"
     },
     "artifactDetailPage": {
       "a_newer_version_is_available_in_the_remote_copy": "· रिमोट कॉपी में एक नया संस्करण उपलब्ध है",

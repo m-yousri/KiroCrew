@@ -8710,6 +8710,13 @@
       "label": "পরিবর্তনে পুনরায় চালু করা লাগে",
       "tooltip": "{{productName}} চলার সময় এই সেটিং পরিবর্তন করা যায় না। সংরক্ষিত মানটি রাখা হয় এবং {{productName}} পরের বার পুনরায় চালু হলে প্রয়োগ হবে (সেটিংস → সম্পর্কে, বা যে টার্মিনাল থেকে আপনি এটি চালু করেছেন)।",
       "schema_unavailable": "এই সেটিংয়ের জন্য পুনরায় চালু করা দরকার কি না তা পরীক্ষা করা যায়নি।"
+    },
+    "directDeploy": {
+      "deploy_via_agent": "এজেন্টের মাধ্যমে ডিপ্লয় করুন",
+      "deploy_as_permanent": "স্থায়ীভাবে ডিপ্লয় করুন",
+      "ttl_permanent": "স্থায়ী (মেয়াদ নেই)",
+      "ttl_expires_in_hours": "{{hours}} ঘণ্টা পরে শেষ",
+      "deploys_from_here_confirm_gated": "এখান থেকেই ডিপ্লয় হয় — আগে আপনি নিশ্চিত করুন"
     }
   },
   "hooks": {
@@ -9152,7 +9159,6 @@
       "deploy": "ডিপ্লয়",
       "deploy_anyway": "তবুও ডিপ্লয় করো",
       "deploy_artifact": "{{name}} ডিপ্লয় করো",
-      "deploy_opens_a_new_chat_session_that_runs_the_ar": "ডিপ্লয় একটি নতুন চ্যাট সেশন খোলে, যা নির্বাচিত প্রোফাইল দিয়ে artifact-deploy স্কিলটি চালায়।",
       "deploy_profile_for_slug": "{{slug}}-এর জন্য ডিপ্লয় প্রোফাইল",
       "deploy_recall_destroy_each_require_explicit_conf": "ডিপ্লয় / রিকল / ডেস্ট্রয় — প্রত্যেকটির জন্য স্পষ্ট নিশ্চিতকরণ প্রয়োজন\n              (কখনও স্বয়ংক্রিয়ভাবে অনুমোদিত হয় না) এবং প্রত্যেকটি একটি SEL অডিট ইভেন্ট তৈরি করে।",
       "deployments_count": "ডিপ্লয়মেন্ট ({{count}})",
@@ -9266,7 +9272,10 @@
       "remove_profile_title": "প্রোফাইল সরাবেন?",
       "remove_profile_button": "প্রোফাইল সরান",
       "retry": "আবার চেষ্টা করুন",
-      "profile_errors_title": "কিছু প্রোফাইল তালিকাভুক্ত করা যায়নি"
+      "profile_errors_title": "কিছু প্রোফাইল তালিকাভুক্ত করা যায়নি",
+      "4_optional_install_auto_cleanup": "৪. ঐচ্ছিক: অটো-ক্লিনআপ ইনস্টল করুন",
+      "auto_cleanup_explainer": "শুধু সেই ডিপ্লয়ের জন্য দরকার যেগুলো নিজে থেকেই শেষ হবে। না থাকলে স্থায়ীভাবে ডিপ্লয় করুন এবং Recall বা Destroy দিয়ে নিজে মুছুন।",
+      "deploy_publishes_directly_from_this_page": "নিশ্চিত করার পরে Deploy এই পেজ থেকেই প্রকাশ করে। যেসব অ্যাপের প্রস্তুতি দরকার সেগুলো এজেন্টের সঙ্গে ডিপ্লয় সেশন খোলে।"
     },
     "artifactDetailPage": {
       "a_newer_version_is_available_in_the_remote_copy": "· রিমোট কপিতে একটি নতুন সংস্করণ পাওয়া যাচ্ছে",

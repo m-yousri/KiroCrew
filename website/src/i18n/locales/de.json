@@ -8710,6 +8710,13 @@
       "label": "Änderungen erfordern Neustart",
       "tooltip": "Diese Einstellung kann sich nicht ändern, während {{productName}} läuft. Der gespeicherte Wert bleibt erhalten und gilt beim nächsten Neustart von {{productName}} (Einstellungen → Über, oder das Terminal, aus dem du es gestartet hast).",
       "schema_unavailable": "Es konnte nicht geprüft werden, ob diese Einstellung einen Neustart braucht."
+    },
+    "directDeploy": {
+      "deploy_via_agent": "Über Agent bereitstellen",
+      "deploy_as_permanent": "Dauerhaft bereitstellen",
+      "ttl_permanent": "Dauerhaft (kein Ablauf)",
+      "ttl_expires_in_hours": "Läuft in {{hours}} Stunden ab",
+      "deploys_from_here_confirm_gated": "wird von hier bereitgestellt — Sie bestätigen zuerst"
     }
   },
   "hooks": {
@@ -9152,7 +9159,6 @@
       "deploy": "Bereitstellen",
       "deploy_anyway": "Trotzdem bereitstellen",
       "deploy_artifact": "{{name}} bereitstellen",
-      "deploy_opens_a_new_chat_session_that_runs_the_ar": "„Bereitstellen“ öffnet eine neue Chat-Sitzung, die den Skill „artifact-deploy“ mit dem gewählten Profil ausführt.",
       "deploy_profile_for_slug": "Bereitstellungsprofil für {{slug}}",
       "deploy_recall_destroy_each_require_explicit_conf": "Bereitstellen / Zurückziehen / Zerstören erfordern jeweils eine ausdrückliche Bestätigung\n              (niemals automatisch genehmigt) und lösen ein SEL-Audit-Ereignis aus.",
       "deployments_count": "Bereitstellungen ({{count}})",
@@ -9266,7 +9272,10 @@
       "remove_profile_title": "Profil entfernen?",
       "remove_profile_button": "Profil entfernen",
       "retry": "Wiederholen",
-      "profile_errors_title": "Einige Profile konnten nicht aufgelistet werden"
+      "profile_errors_title": "Einige Profile konnten nicht aufgelistet werden",
+      "4_optional_install_auto_cleanup": "4. Optional: Auto-Aufräumen installieren",
+      "auto_cleanup_explainer": "Nur nötig für Bereitstellungen, die von selbst ablaufen sollen. Ohne sie dauerhaft bereitstellen und selbst per Recall oder Destroy entfernen.",
+      "deploy_publishes_directly_from_this_page": "Deploy veröffentlicht nach Ihrer Bestätigung direkt von dieser Seite. Apps, die noch vorbereitet werden müssen, öffnen stattdessen eine Deploy-Sitzung mit dem Agenten."
     },
     "artifactDetailPage": {
       "a_newer_version_is_available_in_the_remote_copy": "· eine neuere Version ist in der Remote-Kopie verfügbar",

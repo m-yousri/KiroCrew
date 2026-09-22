@@ -9,6 +9,9 @@ import ErrorNotice from '../components/ErrorNotice'
 import SimpleSelect from '../components/SimpleSelect'
 import { useConfirm } from '../components/ConfirmDialog'
 import PublicPublishAckModal from '../components/PublicPublishAckModal'
+import ErrorDetails from '../components/ErrorDetails'
+import DirectDeployFlow from '../components/DirectDeployFlow'
+import { useDirectDeploy, TTL_CHOICES } from '../hooks/useDirectDeploy'
 import InfoTip from '../components/InfoTip'
 import { safeHttpUrl } from '../lib/safeUrl'
 import { copyToClipboard, copyCode } from '../utils/clipboard'
@@ -120,11 +123,15 @@ export default function ArtifactDeployPage() {
   const [npRole, setNpRole] = useState('')
   const [npCreate, setNpCreate] = useState(false)
 
-  const cfgQ = useQuery<{ cloudDeploymentEnabled?: boolean }>({
+  const cfgQ = useQuery<{ cloudDeploymentEnabled?: boolean; reaperInstallScript?: string }>({
     queryKey: ['deploy-web', 'config'],
     queryFn: () => jget('/config'),
   })
   const deployCfg = cfgQ.data
+  // Resolved server-side: the install path differs between a ~/.kirocrew and a
+  // ~/.kiro/crew root, so the browser cannot spell it. Falls back to the bare
+  // name only on an older gateway that does not send it.
+  const cleanupScriptPath = deployCfg?.reaperInstallScript || 'install-reaper.sh'
   // Absent means an older backend that predates the flag — treat as enabled so a
   // version skew never hides a working deploy surface. Only an explicit false
   // withholds it.
@@ -169,7 +176,12 @@ export default function ArtifactDeployPage() {
     (a) => !a.webapp_metadata?.deploy_target?.public_url && a.webapp_metadata?.lifecycle?.status !== 'expired')
   const navigate = useNavigate()
   const [draftProfiles, setDraftProfiles] = useState<Record<string, string>>({})
-  const deployDraft = (slug: string) => {
+  // The chat hand-off is now the FALLBACK, not the action. It is reached only
+  // when the backend says this app has no built static root for the direct path
+  // to publish (`webapp_root_unavailable`) — and the button that reaches it says
+  // "Deploy via agent", because a button labelled "Deploy" that opens a chat is
+  // the loop this page was reported for (#12816).
+  const launchDeployChat = (slug: string) => {
     const chosen = draftProfiles[slug] || defaultProfile
     ;(window as unknown as { __mc_chat_launch?: { message: string; ts: number } }).__mc_chat_launch = {
       message:
@@ -408,6 +420,19 @@ export default function ArtifactDeployPage() {
             <div>
               <b>{i18nT('pages.artifactDeployPage.3_apply_the_iam_policy')}</b> {i18nT('pages.artifactDeployPage.click')} <b>{i18nT('pages.artifactDeployPage.get_iam_policy')}</b>{i18nT('pages.artifactDeployPage.then_apply_it_yourself_to_a_dedicated_role_ident')} <code>{i18nT('pages.artifactDeployPage.aws_iam')}</code> {i18nT('pages.artifactDeployPage.command_kirocrew_never_edits_your_iam_the_first')}
             </div>
+            {/* Step 4 exists because its absence was a trap: the deploy TTL
+                defaults to a finite window, a finite window needs this stack, and
+                nothing above ever mentioned it — so a first deploy failed on a
+                precondition the setup guide had never named. Optional, and the
+                page now defaults new deploys to permanent, so skipping it costs
+                nothing but auto-expiry. */}
+            <div>
+              <b>{i18nT('pages.artifactDeployPage.4_optional_install_auto_cleanup')}</b>{' '}
+              {i18nT('pages.artifactDeployPage.auto_cleanup_explainer')}
+              <div style={{ marginTop: 6 }}>
+                <CmdRow text={`${cleanupScriptPath} --profile ${defaultProfile || '<profile>'} --region ${npRegion || 'us-west-2'}`} />
+              </div>
+            </div>
             <span style={{ color: 'var(--accent)', fontSize: 12, cursor: 'default' }}>
               {i18nT('pages.artifactDeployPage.full_setup_guide_profile_aws_cli_v2_troubleshoot')}
             </span>
@@ -629,52 +654,28 @@ export default function ArtifactDeployPage() {
           <table className="w-full border-collapse table-striped">
             <thead>
               <tr>
-                {['Name', 'Status', 'Est. Cost', 'Profile', ''].map(h => (
+                {['Name', 'Status', 'Est. Cost', 'Profile', 'Expiry', ''].map(h => (
                   <th key={h} className="text-left text-muted text-[12px] uppercase tracking-[.04em] px-2.5 py-2 border-b border-border font-medium">{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {draftWebapps.map((a) => {
-                const cost = webappCost(a)
-                return (
-                  <tr key={a.slug} className="hover:bg-bg-hover transition-colors">
-                    <td className="px-2.5 py-2 border-b border-border text-sm font-semibold">
-                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                        <Rocket size={13} stroke={'var(--accent)'} /> {a.slug}
-                      </span>
-                    </td>
-                    <td className="px-2.5 py-2 border-b border-border text-sm"><Badge variant="warn">{i18nT('pages.artifactDeployPage.not_deployed')}</Badge></td>
-                    <td className="px-2.5 py-2 border-b border-border text-sm text-muted">{cost > 0 ? `≤ $${cost.toFixed(4)}` : '~$0.00'}</td>
-                    <td className="px-2.5 py-2 border-b border-border text-sm">
-                      {profiles.length > 0 && (
-                        <SimpleSelect
-                          options={profiles.map((p) => p.name)}
-                          value={draftProfiles[a.slug] || defaultProfile || ''}
-                          onChange={(v) => setDraftProfiles((m) => ({ ...m, [a.slug]: v }))}
-                          clearLabel={defaultProfile ? `${defaultProfile} (default)` : i18nT('pages.artifactDeployPage.default')}
-                          aria-label={i18nT('pages.artifactDeployPage.deploy_profile_for_slug', { slug: a.slug })}
-                          style={{ minWidth: 100 }}
-                        />
-                      )}
-                    </td>
-                    <td className="px-2.5 py-2 border-b border-border text-sm text-right">
-                      <span style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
-                        <Btn primary onClick={() => deployDraft(a.slug)} aria-label={i18nT('pages.artifactDeployPage.deploy_artifact', { name: a.slug })}>
-                          <Rocket size={11} /> {i18nT('pages.artifactDeployPage.deploy')}
-                        </Btn>
-                        <Link to={`/artifacts/${encodeURIComponent(a.slug)}`} style={linkBtn}>
-                          <ExternalLink size={11} /> {i18nT('pages.artifactDeployPage.details')}
-                        </Link>
-                      </span>
-                    </td>
-                  </tr>
-                )
-              })}
+              {draftWebapps.map((a) => (
+                <DraftRow
+                  key={a.slug}
+                  artifact={a}
+                  cost={webappCost(a)}
+                  profiles={profiles.map((p) => p.name)}
+                  defaultProfile={defaultProfile}
+                  chosenProfile={draftProfiles[a.slug] || defaultProfile || ''}
+                  onProfileChange={(v) => setDraftProfiles((m) => ({ ...m, [a.slug]: v }))}
+                  onAgentDeploy={() => launchDeployChat(a.slug)}
+                />
+              ))}
             </tbody>
           </table>
           <div style={{ paddingTop: 10, fontSize: 11, color: 'var(--muted)' }}>
-            {i18nT('pages.artifactDeployPage.deploy_opens_a_new_chat_session_that_runs_the_ar')}
+            {i18nT('pages.artifactDeployPage.deploy_publishes_directly_from_this_page')}
           </div>
         </Card>
       )}
@@ -778,6 +779,109 @@ export default function ArtifactDeployPage() {
   )
 }
 
+// ── Ready-to-deploy row ─────────────────────────────────────────────────
+//
+// One row, one deploy state machine — which is why it is a component rather than
+// inline JSX in a `.map()`: `useDirectDeploy` is a hook and cannot be called in a
+// loop body.
+//
+// The primary button DEPLOYS, from here, behind the public-by-link
+// acknowledgment. It only becomes the agent hand-off once the backend has said
+// this app has no built static root to publish, and then it says so.
+function DraftRow({
+  artifact,
+  cost,
+  profiles,
+  defaultProfile,
+  chosenProfile,
+  onProfileChange,
+  onAgentDeploy,
+}: {
+  artifact: Artifact
+  cost: number
+  profiles: string[]
+  defaultProfile: string
+  chosenProfile: string
+  onProfileChange: (v: string) => void
+  onAgentDeploy: () => void
+}) {
+  const flow = useDirectDeploy(artifact.slug)
+  const { phase, ttlHours, setTtlHours, start, busy, needsAgent } = flow
+  const ttlLabel = (h: number) =>
+    h === 0
+      ? i18nT('components.directDeploy.ttl_permanent')
+      : i18nT('components.directDeploy.ttl_expires_in_hours', { hours: h })
+
+  return (
+    <tr className="hover:bg-bg-hover transition-colors align-top">
+      <td className="px-2.5 py-2 border-b border-border text-sm font-semibold">
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          <Rocket size={13} stroke={'var(--accent)'} /> {artifact.slug}
+        </span>
+      </td>
+      <td className="px-2.5 py-2 border-b border-border text-sm">
+        <Badge variant="warn">{i18nT('pages.artifactDeployPage.not_deployed')}</Badge>
+      </td>
+      <td className="px-2.5 py-2 border-b border-border text-sm text-muted">
+        {cost > 0 ? `≤ $${cost.toFixed(4)}` : '~$0.00'}
+      </td>
+      <td className="px-2.5 py-2 border-b border-border text-sm">
+        {profiles.length > 0 && (
+          <SimpleSelect
+            options={profiles}
+            value={chosenProfile}
+            onChange={onProfileChange}
+            clearLabel={defaultProfile ? `${defaultProfile} (default)` : i18nT('pages.artifactDeployPage.default')}
+            aria-label={i18nT('pages.artifactDeployPage.deploy_profile_for_slug', { slug: artifact.slug })}
+            style={{ minWidth: 100 }}
+          />
+        )}
+      </td>
+      {/* Permanent leads deliberately: it is the only choice that needs no
+          auto-cleanup infrastructure, so it is the one that cannot fail on a
+          fresh account. Defaulting to 72 is what put every first deploy into the
+          reaper precondition. */}
+      <td className="px-2.5 py-2 border-b border-border text-sm">
+        <SimpleSelect
+          options={TTL_CHOICES.map(String)}
+          optionLabels={TTL_CHOICES.map(ttlLabel)}
+          value={String(ttlHours)}
+          onChange={(v) => setTtlHours(Number(v))}
+          aria-label={i18nT('components.publishHub.ttl_time_to_live')}
+          style={{ minWidth: 130 }}
+        />
+      </td>
+      <td className="px-2.5 py-2 border-b border-border text-sm">
+        <span style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+          {needsAgent ? (
+            <Btn onClick={onAgentDeploy} aria-label={i18nT('components.directDeploy.deploy_via_agent')}>
+              <Rocket size={11} /> {i18nT('components.directDeploy.deploy_via_agent')}
+            </Btn>
+          ) : (
+            <Btn
+              primary
+              disabled={busy}
+              onClick={() => void start(chosenProfile)}
+              aria-label={i18nT('pages.artifactDeployPage.deploy_artifact', { name: artifact.slug })}
+            >
+              <Rocket size={11} />{' '}
+              {phase.kind === 'checking'
+                ? i18nT('components.publishHub.checking')
+                : phase.kind === 'deploying'
+                  ? i18nT('components.webAppArtifactCard.deploying')
+                  : i18nT('pages.artifactDeployPage.deploy')}
+            </Btn>
+          )}
+          <Link to={`/artifacts/${encodeURIComponent(artifact.slug)}`} style={linkBtn}>
+            <ExternalLink size={11} /> {i18nT('pages.artifactDeployPage.details')}
+          </Link>
+        </span>
+        <DirectDeployFlow slug={artifact.slug} flow={flow} />
+      </td>
+    </tr>
+  )
+}
+
 // ── Pending confirmations component ─────────────────────────────────────
 
 interface PendingEntry {
@@ -818,7 +922,18 @@ function PendingConfirmations({ qc, askAgent }: { qc: ReturnType<typeof useQuery
       // "Deploy anyway" sends override_scan so the backend clears them.
       const res = await fetch(BASE + `/pending/${id}/confirm`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Session-Key': 'dashboard:ui' }, body: JSON.stringify(overrideScan ? { override_scan: true } : {}) })
       const data = await res.json()
-      if (!res.ok) throw new Error(data.error || `Confirm failed (${res.status})`)
+      if (!res.ok) {
+        // Carry the two technical fields alongside the message so the banner can
+        // stay the plain sentence and the stack names go behind Details. A
+        // confirm here is exactly where the reaper precondition lands.
+        const err = new Error(data.error || `Confirm failed (${res.status})`) as Error & {
+          details?: string; remediation?: string; code?: string
+        }
+        err.details = typeof data.details === 'string' ? data.details : undefined
+        err.remediation = typeof data.remediation === 'string' ? data.remediation : undefined
+        err.code = typeof data.code === 'string' ? data.code : undefined
+        throw err
+      }
       return data
     },
     onSuccess: () => {
@@ -888,12 +1003,21 @@ function PendingConfirmations({ qc, askAgent }: { qc: ReturnType<typeof useQuery
           )
         })}
         {/* Pending entries are server-persisted, so a failed confirm/dismiss
-            loses nothing here; the page decides `askAgent` for its own draft. */}
+            loses nothing here; the page decides `askAgent` for its own draft.
+            The banner holds the plain sentence and the stack/parameter names sit
+            behind Details — a confirm is exactly where the auto-cleanup
+            precondition lands, and that message used to be four product nouns. */}
         <ErrorNotice
           message={confirmMut.isError ? (errMessage(confirmMut.error) || i18nT('components.errorBoundary.something_went_wrong')) : dismissMut.isError ? (errMessage(dismissMut.error) || i18nT('components.errorBoundary.something_went_wrong')) : null}
           onDismiss={() => { confirmMut.reset(); dismissMut.reset() }}
           askAgent={askAgent}
         />
+        {confirmMut.isError && (
+          <ErrorDetails
+            details={(confirmMut.error as { details?: string } | null)?.details}
+            remediation={(confirmMut.error as { remediation?: string } | null)?.remediation}
+          />
+        )}
       </div>
       {/* Same blocking acknowledgment the Publish panel uses — confirming here
           creates the public resource, so it cannot be a one-click row action. */}

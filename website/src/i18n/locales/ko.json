@@ -8593,6 +8593,13 @@
       "label": "변경 시 다시 시작 필요",
       "tooltip": "이 설정은 {{productName}}이(가) 실행 중인 동안에는 변경할 수 없습니다. 저장된 값은 유지되며 {{productName}}을(를) 다음에 다시 시작할 때 적용됩니다(설정 → 정보, 또는 실행한 터미널에서).",
       "schema_unavailable": "이 설정에 다시 시작이 필요한지 확인할 수 없습니다."
+    },
+    "directDeploy": {
+      "deploy_via_agent": "에이전트로 배포",
+      "deploy_as_permanent": "영구 배포",
+      "ttl_permanent": "영구 (만료 없음)",
+      "ttl_expires_in_hours": "{{hours}}시간 후 만료",
+      "deploys_from_here_confirm_gated": "여기서 배포합니다 — 먼저 확인합니다"
     }
   },
   "hooks": {
@@ -9026,7 +9033,6 @@
       "deploy": "배포",
       "deploy_anyway": "그래도 배포",
       "deploy_artifact": "{{name}} 배포",
-      "deploy_opens_a_new_chat_session_that_runs_the_ar": "배포하면 선택한 프로필로 artifact-deploy 스킬을 실행하는 새 채팅 세션이 열립니다.",
       "deploy_profile_for_slug": "{{slug}}의 배포 프로필",
       "deploy_recall_destroy_each_require_explicit_conf": "배포 / 회수 / 파기는 각각 명시적인 확인이 필요하며(자동 승인되지 않습니다)\n SEL 감사 이벤트를 발생시킵니다.",
       "deployments_count": "배포 ({{count}})",
@@ -9138,7 +9144,10 @@
       "remove_profile_title": "프로필을 제거하시겠습니까?",
       "remove_profile_button": "프로필 제거",
       "retry": "다시 시도",
-      "profile_errors_title": "일부 프로필을 나열할 수 없습니다"
+      "profile_errors_title": "일부 프로필을 나열할 수 없습니다",
+      "4_optional_install_auto_cleanup": "4. 선택: 자동 정리 설치",
+      "auto_cleanup_explainer": "스스로 만료되게 하려는 배포에만 필요합니다. 없으면 영구로 배포하고 Recall 또는 Destroy로 직접 삭제하세요.",
+      "deploy_publishes_directly_from_this_page": "Deploy는 확인 후 이 페이지에서 배포합니다. 준비가 더 필요한 앱은 대신 에이전트와 배포 세션을 엽니다."
     },
     "artifactDetailPage": {
       "a_newer_version_is_available_in_the_remote_copy": "· 원격 사본에 더 새로운 버전이 있습니다",

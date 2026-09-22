@@ -19,6 +19,8 @@ import { Badge } from '../components/ui'
 import SimpleSelect from '../components/SimpleSelect'
 import { framablePreviewUrl, safeHttpUrl } from '../lib/safeUrl'
 import { useCloudDeploymentEnabled } from '../hooks/useCloudDeploymentEnabled'
+import { useDirectDeploy } from '../hooks/useDirectDeploy'
+import DirectDeployFlow from './DirectDeployFlow'
 import { copyToClipboard } from '../utils/clipboard'
 import type { Artifact, WebAppMetadata } from '../types'
 
@@ -378,11 +380,16 @@ export default function WebAppArtifactCard({
   // beats iframing the remote deployment — no dependency on remote frame
   // headers, CDN propagation, or the deployment even existing.
   const { base: previewBase, remoteFramable } = useAppPreview(artifact.slug, !!meta)
+  // The direct deploy. Its `needsAgent` flag is what turns the button below into
+  // the chat hand-off — and only after the backend has said this app has no built
+  // static root to publish, so the honest label appears instead of a "Deploy"
+  // button that silently opens a chat (#12816).
+  const deployFlow = useDirectDeploy(artifact.slug)
+  const needsAgent = deployFlow.needsAgent
   // Deploy launches a FRESH chat session that auto-runs the artifact-deploy skill
   // on this artifact — the same __mc_chat_launch mechanism ChatPage consumes (new
-  // session + auto-send). A fresh session is the isolation boundary, so no
-  // subagent is needed: the agent adapts + deploys + debugs inline there. The
-  // prompt is phrased to trigger the artifact-deploy skill.
+  // session + auto-send). Now the FALLBACK for an app the direct path cannot
+  // publish, plus the redeploy affordance on an expired card.
   const openDeployChat = useCallback(() => {
     const chosen = deployProfile || meta?.deploy_target?.profile || defaultProfile
     ;(window as unknown as { __mc_chat_launch?: { message: string; ts: number } }).__mc_chat_launch = {
@@ -462,25 +469,46 @@ export default function WebAppArtifactCard({
               />
             )}
             {cloudDeployEnabled && (
-            <button
-              type="button"
-              onClick={openDeployChat}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[13px] font-medium bg-accent text-accent-fg hover:bg-accent-hover cursor-pointer transition-all border-none"
-              title={i18nT('components.webAppArtifactCard.deploy_this_app_to_your_aws_account')}
-              aria-label={i18nT('components.webAppArtifactCard.deploy')}
-            >
-              <Rocket size={14} aria-hidden="true" />
-              {i18nT('components.webAppArtifactCard.deploy')}
-            </button>
+              needsAgent ? (
+                <button
+                  type="button"
+                  onClick={openDeployChat}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[13px] font-medium border border-accent/40 text-accent hover:bg-accent/10 cursor-pointer transition-all bg-transparent"
+                  title={i18nT('components.directDeploy.deploy_via_agent')}
+                  aria-label={i18nT('components.directDeploy.deploy_via_agent')}
+                >
+                  <Rocket size={14} aria-hidden="true" />
+                  {i18nT('components.directDeploy.deploy_via_agent')}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  disabled={deployFlow.busy}
+                  onClick={() => void deployFlow.start(deployProfile || defaultProfile)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[13px] font-medium bg-accent text-accent-fg hover:bg-accent-hover cursor-pointer transition-all border-none disabled:opacity-40 disabled:cursor-not-allowed"
+                  title={i18nT('components.webAppArtifactCard.deploy_this_app_to_your_aws_account')}
+                  aria-label={i18nT('components.webAppArtifactCard.deploy')}
+                >
+                  <Rocket size={14} aria-hidden="true" />
+                  {deployFlow.phase.kind === 'checking'
+                    ? i18nT('components.publishHub.checking')
+                    : deployFlow.phase.kind === 'deploying'
+                      ? i18nT('components.webAppArtifactCard.deploying')
+                      : i18nT('components.webAppArtifactCard.deploy')}
+                </button>
+              )
             )}
             {cloudDeployEnabled && (
             <span className="text-[10px] text-muted">
-              {registeredProfiles.length > 0
+              {needsAgent
                 ? i18nT('components.webAppArtifactCard.opens_a_new_chat_session_to_run_the_deploy')
-                : i18nT('components.webAppArtifactCard.opens_a_new_chat_session_to_run_the_deploy_add_a')}
+                : registeredProfiles.length > 0
+                  ? i18nT('components.directDeploy.deploys_from_here_confirm_gated')
+                  : i18nT('components.webAppArtifactCard.opens_a_new_chat_session_to_run_the_deploy_add_a')}
             </span>
             )}
           </div>
+          {cloudDeployEnabled && <DirectDeployFlow slug={artifact.slug} flow={deployFlow} />}
         </div>
 
         {previewBase && (

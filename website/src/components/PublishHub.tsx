@@ -14,6 +14,7 @@ import { AlertCircle, AlertTriangle, Check, ExternalLink, Globe, Settings, Uploa
 import { api, type AppPublishProvider } from '../api/client'
 import { Card, Btn, ContentSkeleton } from './ui'
 import PublicPublishAckModal from './PublicPublishAckModal'
+import ErrorDetails from './ErrorDetails'
 import SimpleSelect from './SimpleSelect'
 import type { Artifact, PublishProviderDescriptor } from '../types'
 import { safeHttpUrl } from '../lib/safeUrl'
@@ -251,7 +252,7 @@ export function PublishHub({
   // of an error rather than a non-empty `url`: a destination can publish
   // successfully and expose no browsable link, and conflating the two is what
   // rendered a succeeded publish as a blank error.
-  const [result, setResult] = useState<{ url?: string; error?: string; notice?: string; notice_code?: string } | null>(null)
+  const [result, setResult] = useState<{ url?: string; error?: string; notice?: string; notice_code?: string; details?: string; remediation?: string } | null>(null)
   const [busy, setBusy] = useState(false)
   // Non-null while the blocking public-exposure acknowledgment is on screen.
   // `overrideScan` remembers WHICH commit path opened it, so acknowledging
@@ -397,8 +398,15 @@ export function PublishHub({
         setPreview(null)
       } else if (data?.error) {
         // Checked BEFORE the outcome: an error response is authoritative even if
-        // it happens to carry other fields.
-        setResult({ error: data.error })
+        // it happens to carry other fields. `details` and `remediation` ride
+        // along so the banner can hold the plain sentence while the technical
+        // half goes behind the Details toggle.
+        setResult({
+          error: data.error,
+          ...(typeof data.details === 'string' && data.details ? { details: data.details } : {}),
+          ...(typeof data.remediation === 'string' && data.remediation
+            ? { remediation: data.remediation } : {}),
+        })
       } else if (outcome) {
         // `notice_code` travels with `notice` here for the same reason as the two
         // sibling sites above: the catalog selector keys the remedy copy off the code,
@@ -639,8 +647,13 @@ export function PublishHub({
       {result && (
         <div className="space-y-2">
           {result.error ? (
-            <div className="flex items-center gap-2 text-sm text-danger">
-              <AlertCircle size={14} /> {result.error}
+            <div className="space-y-1.5">
+              <div className="flex items-center gap-2 text-sm text-danger">
+                <AlertCircle size={14} /> {result.error}
+              </div>
+              {/* Same split the deploy refusals use: the sentence stays in the
+                  banner, the stack and parameter names go one click away. */}
+              <ErrorDetails details={result.details} remediation={result.remediation} />
             </div>
           ) : (
             <div className="space-y-1.5">

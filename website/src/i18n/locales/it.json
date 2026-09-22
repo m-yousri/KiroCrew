@@ -8827,6 +8827,13 @@
       "label": "le modifiche richiedono un riavvio",
       "tooltip": "Questa impostazione non può cambiare mentre {{productName}} è in esecuzione. Il valore salvato viene conservato e applicato al prossimo riavvio di {{productName}} (Impostazioni → Informazioni, oppure il terminale da cui lo hai avviato).",
       "schema_unavailable": "Impossibile verificare se questa impostazione richiede un riavvio."
+    },
+    "directDeploy": {
+      "deploy_via_agent": "Distribuisci tramite agente",
+      "deploy_as_permanent": "Distribuisci come permanente",
+      "ttl_permanent": "Permanente (senza scadenza)",
+      "ttl_expires_in_hours": "Scade tra {{hours}} ore",
+      "deploys_from_here_confirm_gated": "distribuisce da qui — prima confermi"
     }
   },
   "hooks": {
@@ -9278,7 +9285,6 @@
       "deploy": "Esegui il deploy",
       "deploy_anyway": "Esegui il deploy comunque",
       "deploy_artifact": "Esegui il deploy di {{name}}",
-      "deploy_opens_a_new_chat_session_that_runs_the_ar": "Il deploy apre una nuova sessione di chat che esegue la skill artifact-deploy con il profilo scelto.",
       "deploy_profile_for_slug": "Profilo di deploy per {{slug}}",
       "deploy_recall_destroy_each_require_explicit_conf": "Deploy / Richiama / Distruggi richiedono ciascuno una conferma esplicita\n              (mai approvati automaticamente) ed emettono un evento di audit SEL.",
       "deployments_count": "Deployment ({{count}})",
@@ -9394,7 +9400,10 @@
       "remove_profile_title": "Rimuovere il profilo?",
       "remove_profile_button": "Rimuovi il profilo",
       "retry": "Riprova",
-      "profile_errors_title": "Non è stato possibile elencare alcuni profili"
+      "profile_errors_title": "Non è stato possibile elencare alcuni profili",
+      "4_optional_install_auto_cleanup": "4. Opzionale: installa la pulizia automatica",
+      "auto_cleanup_explainer": "Serve solo per distribuzioni che devono scadere da sole. Altrimenti distribuisci come permanente e rimuovila con Recall o Destroy.",
+      "deploy_publishes_directly_from_this_page": "Deploy pubblica da questa pagina dopo la tua conferma. Le app da preparare aprono invece una sessione di distribuzione con l'agente."
     },
     "artifactDetailPage": {
       "a_newer_version_is_available_in_the_remote_copy": "· è disponibile una versione più recente nella copia remota",

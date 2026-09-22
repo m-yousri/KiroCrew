@@ -8593,6 +8593,13 @@
       "label": "変更には再起動が必要",
       "tooltip": "この設定は {{productName}} の実行中には変更できません。保存した値は保持され、次に {{productName}} を再起動したときに適用されます（設定 → バージョン情報、または起動したターミナルから）。",
       "schema_unavailable": "この設定に再起動が必要かどうかを確認できませんでした。"
+    },
+    "directDeploy": {
+      "deploy_via_agent": "エージェント経由でデプロイ",
+      "deploy_as_permanent": "無期限でデプロイ",
+      "ttl_permanent": "無期限（期限なし）",
+      "ttl_expires_in_hours": "{{hours}} 時間後に期限切れ",
+      "deploys_from_here_confirm_gated": "ここからデプロイします — 先に確認します"
     }
   },
   "hooks": {
@@ -9026,7 +9033,6 @@
       "deploy": "デプロイ",
       "deploy_anyway": "それでもデプロイ",
       "deploy_artifact": "{{name}} をデプロイ",
-      "deploy_opens_a_new_chat_session_that_runs_the_ar": "デプロイは選択したプロファイルで artifact-deploy スキルを実行する新しいチャットセッションを開きます。",
       "deploy_profile_for_slug": "{{slug}} のデプロイプロファイル",
       "deploy_recall_destroy_each_require_explicit_conf": "デプロイ / Recall / 破棄のそれぞれが明示的な確認を必要とします\n              （自動承認なし）および SEL 監査イベントを発行します。",
       "deployments_count": "デプロイ（{{count}}）",
@@ -9138,7 +9144,10 @@
       "remove_profile_title": "プロファイルを削除しますか？",
       "remove_profile_button": "プロファイルを削除",
       "retry": "再試行",
-      "profile_errors_title": "一部のプロファイルを一覧表示できませんでした"
+      "profile_errors_title": "一部のプロファイルを一覧表示できませんでした",
+      "4_optional_install_auto_cleanup": "4. 任意: 自動クリーンアップを導入",
+      "auto_cleanup_explainer": "自動で期限切れにしたいデプロイにのみ必要です。無い場合は無期限でデプロイし、Recall または Destroy で自分で削除してください。",
+      "deploy_publishes_directly_from_this_page": "Deploy は確認後このページから公開します。準備が必要なアプリは代わりにエージェントとのデプロイセッションを開きます。"
     },
     "artifactDetailPage": {
       "a_newer_version_is_available_in_the_remote_copy": "· リモートコピーでより新しいバージョンが利用可能です",

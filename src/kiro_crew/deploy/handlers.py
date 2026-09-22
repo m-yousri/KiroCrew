@@ -1584,6 +1584,13 @@ async def _handle_get_config(_request: web.Request) -> web.Response:
     enabled = await asyncio.to_thread(admits_cloud_deployment, "aws")
     if isinstance(cfg, dict):
         cfg = {**cfg, "cloudDeploymentEnabled": enabled}
+        # The setup guide's optional auto-cleanup step needs a command the user
+        # can actually paste, and the browser cannot resolve where the skill is
+        # installed — the path differs between a ~/.kirocrew and a ~/.kiro/crew
+        # root. Resolved here through the same helper the reaper 409 uses, so the
+        # guide and the refusal can never print different commands. Profile and
+        # region are left to the page, which knows the user's current selection.
+        cfg = {**cfg, "reaperInstallScript": _reaper_remediation("", "")}
     return web.json_response(cfg)
 
 

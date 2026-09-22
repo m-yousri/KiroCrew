@@ -8593,6 +8593,13 @@
       "label": "修改后需重启",
       "tooltip": "{{productName}} 运行期间无法更改此设置。已保存的值会保留，并在 {{productName}} 下次重启后应用（设置 → 关于，或启动它的终端）。",
       "schema_unavailable": "无法检查此设置是否需要重启。"
+    },
+    "directDeploy": {
+      "deploy_via_agent": "通过智能体部署",
+      "deploy_as_permanent": "部署为永久",
+      "ttl_permanent": "永久（不过期）",
+      "ttl_expires_in_hours": "{{hours}} 小时后过期",
+      "deploys_from_here_confirm_gated": "从这里部署 — 先由你确认"
     }
   },
   "hooks": {
@@ -9026,7 +9033,6 @@
       "deploy": "部署",
       "deploy_anyway": "仍然部署",
       "deploy_artifact": "部署 {{name}}",
-      "deploy_opens_a_new_chat_session_that_runs_the_ar": "“部署”会打开一个新的聊天会话，用所选配置文件运行 artifact-deploy 技能。",
       "deploy_profile_for_slug": "{{slug}} 的部署配置文件",
       "deploy_recall_destroy_each_require_explicit_conf": "部署 / 撤回 / 销毁 都需要显式确认\n              （从不自动批准），并会发出 SEL 审计事件。",
       "deployments_count": "部署（{{count}}）",
@@ -9138,7 +9144,10 @@
       "remove_profile_title": "移除配置文件？",
       "remove_profile_button": "移除配置文件",
       "retry": "重试",
-      "profile_errors_title": "部分配置文件无法列出"
+      "profile_errors_title": "部分配置文件无法列出",
+      "4_optional_install_auto_cleanup": "4. 可选：安装自动清理",
+      "auto_cleanup_explainer": "只有希望部署自动过期时才需要。没有它就部署为永久，并用 Recall 或 Destroy 自行删除。",
+      "deploy_publishes_directly_from_this_page": "确认后 Deploy 直接从本页发布。仍需准备的应用会改为与智能体开启一个部署会话。"
     },
     "artifactDetailPage": {
       "a_newer_version_is_available_in_the_remote_copy": "· 远端副本中有更新的版本",

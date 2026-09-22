@@ -223,23 +223,35 @@ describe('WebAppArtifactCard', () => {
     // No teardown button in the not-deployed state.
     expect(screen.queryByRole('button', { name: /Tear down/i })).toBeNull()
 
-    // Clicking Deploy sets the chat-launch intent (new session + auto-send).
+    // Clicking Deploy DEPLOYS. It used to set a chat-launch intent and navigate
+    // away, which is the loop #12816 was reported for: the button on the card
+    // sent a present, authenticated human to a chat that sent them back.
     fireEvent.click(deployBtn)
-    const launch = (window as unknown as { __mc_chat_launch?: { message: string } }).__mc_chat_launch
-    expect(launch).toBeTruthy()
-    expect(launch!.message).toMatch(/deploy/i)
-    expect(launch!.message).toContain('kanban-demo')
+    expect((window as unknown as { __mc_chat_launch?: unknown }).__mc_chat_launch).toBeFalsy()
   })
 
-  it('offers a deploy-time profile dropdown and bakes the choice into the seed prompt', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => ({
-      ok: true,
-      status: 200,
-      json: async () => ({
-        profiles: [{ name: 'my-deploy' }, { name: 'my-sandbox' }],
-        default: 'my-deploy',
-      }),
-    }) as unknown as Response))
+  /** Profiles endpoint plus a deploy endpoint that records what it was sent. */
+  const stubDeployFetch = (profiles: string[], dflt: string) => {
+    const sent: Array<Record<string, unknown>> = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      const u = String(url)
+      const ok = (data: unknown) => ({
+        ok: true, status: 200, json: async () => data,
+      }) as unknown as Response
+      if (u.endsWith('/deploy/deploy')) {
+        sent.push(init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : {})
+        return ok({
+          requires_confirm: true, public: true, site_id: 'kanban-demo',
+          bytes: 10, scan: 'clean', profile: 'x', region: 'us-west-2', content_digest: 'sha256:z',
+        })
+      }
+      return ok({ profiles: profiles.map((name) => ({ name })), default: dflt })
+    }))
+    return sent
+  }
+
+  it('offers a deploy-time profile dropdown and deploys with the chosen profile', async () => {
+    const sent = stubDeployFetch(['my-deploy', 'my-sandbox'], 'my-deploy')
     const artifact = makeArtifact()
     artifact.webapp_metadata!.deploy_target.public_url = ''
     artifact.webapp_metadata!.lifecycle.status = 'draft'
@@ -254,17 +266,15 @@ describe('WebAppArtifactCard', () => {
     fireEvent.click(select)
     fireEvent.click(await screen.findByRole('option', { name: 'profile: my-sandbox' }))
     fireEvent.click(screen.getByRole('button', { name: /^Deploy$/i }))
-    const launch = (window as unknown as { __mc_chat_launch?: { message: string } }).__mc_chat_launch
-    expect(launch!.message).toContain('Use the AWS profile "my-sandbox".')
+    // The choice reaches the deploy request itself, not a sentence in a prompt.
+    await waitFor(() => expect(sent.length).toBe(1))
+    expect(sent[0].profile).toBe('my-sandbox')
+    expect(sent[0].artifact_slug).toBe('kanban-demo')
     vi.unstubAllGlobals()
   })
 
-  it('falls back to the default profile in the seed when nothing is picked', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => ({
-      ok: true,
-      status: 200,
-      json: async () => ({ profiles: [{ name: 'my-deploy' }], default: 'my-deploy' }),
-    }) as unknown as Response))
+  it('falls back to the default profile when nothing is picked', async () => {
+    const sent = stubDeployFetch(['my-deploy'], 'my-deploy')
     const artifact = makeArtifact()
     artifact.webapp_metadata!.deploy_target.public_url = ''
     artifact.webapp_metadata!.lifecycle.status = 'draft'
@@ -273,8 +283,8 @@ describe('WebAppArtifactCard', () => {
 
     await screen.findByLabelText('AWS profile to deploy with')
     fireEvent.click(screen.getByRole('button', { name: /^Deploy$/i }))
-    const launch = (window as unknown as { __mc_chat_launch?: { message: string } }).__mc_chat_launch
-    expect(launch!.message).toContain('Use the AWS profile "my-deploy".')
+    await waitFor(() => expect(sent.length).toBe(1))
+    expect(sent[0].profile).toBe('my-deploy')
     vi.unstubAllGlobals()
   })
 

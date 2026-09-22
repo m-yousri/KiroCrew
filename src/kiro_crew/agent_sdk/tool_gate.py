@@ -585,6 +585,35 @@ def is_enforced(backend: str) -> bool:
     return routing_for(backend) in ENFORCED_ROUTINGS
 
 
+def member_dispatch_needs_owned_permission_surface(backend: str) -> bool:
+    """Whether a member-dispatch mount on *backend* needs Crew to OWN its permission file.
+
+    The precondition on mounting crew-member session control, asked about the
+    HARNESS rather than read off one harness's flag. Session control is the
+    strongest tool set Crew hands a session, so it may ride only a session whose
+    tool calls Crew actually decides -- and there are two different ways that holds.
+
+    A harness whose routing this core ENFORCES (:data:`ENFORCED_ROUTINGS`) needs
+    nothing further. A session that cannot arm the required mechanism is REFUSED
+    before its first prompt, so a session that exists to be mounted into is a gated
+    session by construction. ``SESSION_CONFIG`` -- codex -- is that case.
+
+    A harness whose routing is DECLARED but unenforced needs the fallback, and
+    claude is the reason the fallback exists: ``SEEDED_SETTINGS`` seeds
+    ``permissions.defaultMode`` into ``<work_dir>/.claude/settings.local.json`` and
+    nothing reads back whether the adapter honoured it, so a tool pre-approved in a
+    file Crew does not own never sends ``session/request_permission`` and Crew's gate
+    never fires. Owning that file is what stands in for the missing read-back, which
+    is why the mount waits on it there and only there.
+
+    Derived from the routing table rather than from a second membership set, so the
+    two cannot disagree about one harness -- and a harness added later inherits
+    whatever its own routing already says, which is the fail-closed direction for
+    anything unenforced.
+    """
+    return not is_enforced(backend)
+
+
 def remediation_for(backend: str) -> str:
     """The concrete change an operator can make, or ``""`` when there is none."""
     routing = routing_for(backend)

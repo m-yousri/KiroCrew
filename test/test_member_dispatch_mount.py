@@ -10,8 +10,10 @@ Pins the four seams the member-dispatch mount rides on:
   projection widening: the server joins ``tools`` and the conductor's
   approval-free dashboard verbs join the ``allowedTools`` input BEFORE the
   governance ceiling filter.
-- ``AcpClient._append_member_dispatch_server`` — the claude session-array
-  append, honoring the permission-surface precondition.
+- ``AcpClient._append_member_dispatch_server`` — the session-array append, and
+  the per-backend permission-surface precondition it honors
+  (``tool_gate.member_dispatch_needs_owned_permission_surface``): claude waits on
+  owning ``settings.local.json``, a harness whose routing is enforced does not.
 - ``AcpRuntime._kas_custom_agents`` / ``create_session`` threading — the member
   flag reaches the projection.
 
@@ -28,6 +30,7 @@ from pathlib import Path
 import pytest
 
 import kiro_crew.validation  # noqa: F401 - break the legacy import cycle first
+from kiro_crew import acp_tool_gate
 from kiro_crew.acp.client import AcpClient
 from kiro_crew.acp.kas_agents import to_client_custom_agent
 from kiro_crew.acp.types import (
@@ -36,6 +39,7 @@ from kiro_crew.acp.types import (
     ACP_BACKEND_KAS,
     ACP_BACKEND_KIRO,
     ACP_BACKENDS_MEMBER_DISPATCH,
+    ACP_BACKENDS_SESSION_MCP_ARRAY,
 )
 from kiro_crew.mcp_gateway.claim import STUB_SESSION_TOKEN_ENV
 from kiro_crew.members import (
@@ -52,14 +56,34 @@ class TestCapabilitySet:
         """kiro v2 reads its template from disk and exposes no per-session
         channel, so it must never be in the set: a member session on it runs as
         plain chat rather than mounted-and-refused."""
-        assert ACP_BACKENDS_MEMBER_DISPATCH == frozenset({ACP_BACKEND_CLAUDE, ACP_BACKEND_KAS})
+        assert ACP_BACKENDS_MEMBER_DISPATCH == frozenset(
+            {ACP_BACKEND_CLAUDE, ACP_BACKEND_KAS, ACP_BACKEND_CODEX}
+        )
         assert ACP_BACKEND_KIRO not in ACP_BACKENDS_MEMBER_DISPATCH
-        # codex has the per-session mount now (providers/mirrors/codex.py) and its
-        # precondition is stronger than claude's, so its exclusion is a scope
-        # decision rather than a capability gap: mounting session control into a
-        # codex DM thread is a NEW capability and belongs to whoever decides member
-        # threads run on codex at all.
-        assert ACP_BACKEND_CODEX not in ACP_BACKENDS_MEMBER_DISPATCH
+
+    def test_codex_holds_both_things_membership_needs(self):
+        """The mount it rides, and the gate that makes the mount safe.
+
+        Without the array set a codex session gets no Crew array at all; without an
+        ENFORCED routing a session that cannot be gated would still run, and session
+        control is the one tool set that must not reach one.
+        """
+        assert ACP_BACKEND_CODEX in ACP_BACKENDS_MEMBER_DISPATCH
+        assert ACP_BACKEND_CODEX in ACP_BACKENDS_SESSION_MCP_ARRAY
+        assert acp_tool_gate.is_enforced(ACP_BACKEND_CODEX) is True
+
+    def test_the_precondition_is_per_backend(self):
+        """One predicate, opposite answers, and claude's answer must not move.
+
+        claude's routing is declared and unenforced, so owning
+        ``settings.local.json`` stands in for the read-back this core does not have.
+        codex's routing IS enforced, and its mirror documents the flag as
+        accepted-and-ignored, so asking for an owned file there would withhold every
+        member's tools on a condition that cannot describe the backend.
+        """
+        needs = acp_tool_gate.member_dispatch_needs_owned_permission_surface
+        assert needs(ACP_BACKEND_CLAUDE) is True
+        assert needs(ACP_BACKEND_CODEX) is False
 
 
 class TestMemberDispatchSessionServer:
@@ -262,17 +286,6 @@ class TestClaudeMemberAppend:
         stub.backend = ACP_BACKEND_KIRO
         assert self._run(stub) == _base_servers()
 
-    def test_codex_is_untouched_because_it_is_not_a_member(self):
-        """The capability set withholds the mount, and it is checked FIRST.
-
-        Codex has the per-session mount and an enforced permission routing, so its
-        exclusion is a scope decision rather than a failed precondition. Pinning it
-        here means a later change that adds codex to the set cannot do so silently.
-        """
-        stub = _ClientStub()
-        stub.backend = ACP_BACKEND_CODEX
-        assert self._run(stub) == _base_servers()
-
     def test_same_named_entry_is_replaced_not_duplicated(self):
         stub = _ClientStub()
         servers = _base_servers() + [
@@ -282,6 +295,51 @@ class TestClaudeMemberAppend:
         matches = [e for e in out if e["name"] == MEMBER_DISPATCH_SERVER]
         assert len(matches) == 1
         assert matches[0]["command"] != "old"
+
+
+class TestCodexMemberAppend:
+    """A codex member session mounts without owning any permission file.
+
+    The mutation these carry is the precondition itself: read the claude flag on
+    this backend and the first test withholds the entry, which is the shape that
+    refuses every dispatch call as a drifted server rather than degrading to plain
+    chat. Read the backend's routing and it mounts.
+    """
+
+    @staticmethod
+    def _codex_stub(**over):
+        stub = _ClientStub()
+        stub.backend = ACP_BACKEND_CODEX
+        # No codex session owns a ``settings.local.json``: the harness has no such
+        # file, and the flag is only ever set by claude's writer. So a stub that
+        # left it True would model a client that cannot exist on this backend.
+        stub._claude_settings_authored = False
+        for name, value in over.items():
+            setattr(stub, name, value)
+        return stub
+
+    def _run(self, stub) -> list[dict]:
+        return AcpClient._append_member_dispatch_server(stub, _base_servers())
+
+    def test_member_session_gains_the_entry(self):
+        out = self._run(self._codex_stub())
+        assert [e["name"] for e in out] == ["kirocrew-core", MEMBER_DISPATCH_SERVER]
+        env = out[-1]["env"]
+        assert {"name": "KIROCREW_SESSION_KEY", "value": MEMBER_KEY} in env
+        token = {"name": STUB_SESSION_TOKEN_ENV, "value": _ClientStub._stub_session_token}
+        assert token in env
+
+    def test_non_member_session_is_untouched(self):
+        """The mount is SESSION-scoped, which is the whole reason it is not in the
+        agent template: an ordinary codex session on the same agent gains nothing."""
+        stub = self._codex_stub(_session_key="dashboard_abc123")
+        assert self._run(stub) == _base_servers()
+
+    def test_an_empty_session_key_is_untouched(self):
+        """A pooled child claimed later has no key yet, and a mount with no identity
+        would answer ``identity_unattested`` to every verb."""
+        stub = self._codex_stub(_session_key="")
+        assert self._run(stub) == _base_servers()
 
 
 class TestRuntimeMemberThreading:

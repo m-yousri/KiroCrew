@@ -5419,11 +5419,25 @@ class AcpClient:
         carries ``KIROCREW_SESSION_KEY`` for strict identity — the same value this
         client already exports to the child process env.
 
-        Honors the same permission-surface precondition the mirror translation
-        just applied: when Crew does not own the session's native permission
-        file, the whole array was withheld, and quietly appending a
-        session-control server there would hand a pre-approvable surface exactly
-        the tools the withhold exists to keep off it.
+        The permission-surface precondition is asked of the BACKEND, through
+        ``acp_tool_gate.member_dispatch_needs_owned_permission_surface``, rather than
+        read off ``_claude_settings_authored`` directly. The flag answers one
+        harness's question: claude declares a routing this core does not enforce, so
+        owning ``settings.local.json`` is what stands in for the read-back it lacks,
+        and appending session control onto a surface Crew does not own would hand a
+        pre-approvable file exactly the tools the mirror's withhold keeps off it. A
+        harness whose routing IS enforced cannot satisfy that flag and does not need
+        to -- its session is refused before its first prompt unless the gate arms --
+        and its mirror documents the flag as accepted-and-ignored, so reading the
+        flag there would withhold every member's tools on the strength of a
+        condition that does not describe the backend.
+
+        Both halves of a session's array must agree about this. ``AcpRuntime``
+        mounts the same entry on the resume and create paths, and
+        :meth:`_unmounted_server_identity` judges a trusted tool identity against
+        the array THIS method returns: a backend where the runtime mounts the server
+        and this method withholds it would refuse every dispatch call as a drifted
+        server rather than run a plain chat.
         """
         if self.backend not in ACP_BACKENDS_MEMBER_DISPATCH:
             return servers
@@ -5433,7 +5447,9 @@ class AcpClient:
         if not is_member_session_key(self._session_key):
             return servers
         session_key = self._session_key or ""
-        if not getattr(self, "_claude_settings_authored", False):
+        if acp_tool_gate.member_dispatch_needs_owned_permission_surface(
+            self.backend
+        ) and not getattr(self, "_claude_settings_authored", False):
             logger.warning(
                 "member session %s: permission surface not Crew-owned — session "
                 "control is not mounted; the DM thread runs as plain chat",

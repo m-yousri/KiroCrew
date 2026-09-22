@@ -52,6 +52,7 @@ from kiro_crew.acp_backends import (
     ACP_BACKENDS_MEMBER_DISPATCH,
     ACP_BACKENDS_SESSION_MCP_ARRAY,
 )
+from kiro_crew.members import MEMBER_DISPATCH_SERVER
 from kiro_crew.providers.mirrors import Concern, Disposition, mirror_for
 from kiro_crew.providers.mirrors.codex import (
     CodexMirror,
@@ -67,6 +68,10 @@ from kiro_crew.providers.mirrors.codex import (
 #: advertisement in these tests so they exercise the same input the client feeds
 #: the filter, rather than a shape no adapter returns.
 _CODEX_1_11_CAPS = {"acp": False, "http": True, "sse": False}
+
+#: A crew member's DM session key, in the shape ``members.is_member_session_key``
+#: recognises. The member-dispatch mount rides this session's array.
+_MEMBER_KEY = "dashboard_member-autofix"
 
 _CORE = {"command": "/opt/kirocrew", "args": ["mcp-core"]}
 _CRON = {"command": "/opt/kirocrew", "args": ["mcp-cron"]}
@@ -493,15 +498,60 @@ class TestTheSessionArraySeam:
     plus the source-level pins that keep the split where it is.
     """
 
-    def test_codex_is_in_the_array_set_and_NOT_in_member_dispatch(self):
-        """One set this projection needs, and one it deliberately stays out of.
+    def test_codex_is_in_both_the_array_set_and_member_dispatch(self):
+        """The two sets this session's array depends on.
 
         Without the array set the session gets ``[]`` however good the mirror is.
-        Member dispatch is a different capability -- session control in a DM thread
-        -- and this PR does not add it, so the set is pinned in both directions.
+        Member dispatch rides the same array, so a member DM thread on codex carries
+        the dashboard session-control server as one more element of it.
         """
         assert ACP_BACKEND_CODEX in ACP_BACKENDS_SESSION_MCP_ARRAY
-        assert ACP_BACKEND_CODEX not in ACP_BACKENDS_MEMBER_DISPATCH
+        assert ACP_BACKEND_CODEX in ACP_BACKENDS_MEMBER_DISPATCH
+
+    def test_a_member_session_array_carries_the_dashboard_server(self, tmp_path, agents_dir):
+        """End to end on the client seam: the array a codex member session is handed.
+
+        The whole point of the capability, and the reason it is asserted on the ARRAY
+        rather than on the set: the mirror withholds the dashboard server from the
+        SPEC translation (it is identity-bound, and a spec-described element carries
+        no identity), so only an entry Crew builds itself can land here.
+
+        No ``settings.local.json`` exists on this backend, which is what makes this
+        the mutation test for the precondition: reading claude's ownership flag here
+        withholds the entry, and because ``AcpRuntime`` mounts it on the create and
+        resume paths regardless, that disagreement would make
+        ``_unmounted_server_identity`` refuse every dispatch call rather than leave
+        the thread a plain chat.
+        """
+        _write_spec(agents_dir, servers={}, tools=["@kirocrew-core"])
+        client = AcpClient(
+            work_dir=tmp_path,
+            agent="kirocrew",
+            acp_backend=ACP_BACKEND_CODEX,
+            session_key=_MEMBER_KEY,
+        )
+        assert client._claude_settings_authored is False
+        names = [e["name"] for e in client._session_mcp_servers()]
+        assert names[-1] == MEMBER_DISPATCH_SERVER
+        entry = client._session_mcp_servers()[-1]
+        assert {"name": "KIROCREW_SESSION_KEY", "value": _MEMBER_KEY} in entry["env"]
+
+    def test_an_ordinary_session_array_carries_no_dashboard_server(self, tmp_path, agents_dir):
+        """The negative the per-session design exists for.
+
+        Mounting through the on-disk template would hand session control to every
+        session of the agent; this is the assertion that it does not.
+        """
+        _write_spec(agents_dir, servers={}, tools=["@kirocrew-core"])
+        client = AcpClient(
+            work_dir=tmp_path,
+            agent="kirocrew",
+            acp_backend=ACP_BACKEND_CODEX,
+            session_key="dashboard_abc123",
+        )
+        names = [e["name"] for e in client._session_mcp_servers()]
+        assert MEMBER_DISPATCH_SERVER not in names
+        assert "kirocrew-core" in names
 
     def test_the_session_array_carries_the_spec_and_the_control_plane(self, agents_dir):
         """The one assertion the whole mirror exists to make true.

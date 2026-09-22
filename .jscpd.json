@@ -12,6 +12,7 @@
     "**/defaults.json",
     "**/static/css/**",
     "**/pages/scenes/**",
+    "**/scripts/fixtures/**",
     "**/_vendor/**"
   ],
   "absolute": true,

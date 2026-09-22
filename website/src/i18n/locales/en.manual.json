@@ -1400,6 +1400,7 @@
       "action_continue": "Continue",
       "action_ask": "Ask",
       "group_attention": "Needs You",
+      "group_recent_sessions": "Recent sessions",
       "ask_agent": "Ask the agent: “{{query}}”",
       "action_open": "Open",
       "action_open_app": "Open App Page",

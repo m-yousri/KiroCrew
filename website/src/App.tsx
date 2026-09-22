@@ -3606,7 +3606,7 @@ export default function App() {
             readout capsule's cluster. Two controls, which is the ceiling
             website/AUTOSDE.yaml's max-two-buttons-per-row sets. */}
         {!isMobile && (
-          <div data-topbar-overlay className="flex items-center gap-1.5 min-w-0">
+          <div className="flex items-center gap-1.5 min-w-0">
           <button
             type="button"
             onClick={commandPalette.openPalette}

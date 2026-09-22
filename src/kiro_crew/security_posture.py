@@ -740,6 +740,15 @@ _REDACTION_SINKS: tuple[tuple[str, str, str], ...] = (
         "StreamRedactor mirroring the main chat for the side-question stream.",
     ),
     (
+        "Reply-thread stream and store",
+        "dashboard/chat_threads.py",
+        "Three boundaries of a reply thread on a crewmate chat message: the "
+        "StreamRedactor on the crewmate's live reply (as the side panel's), the "
+        "thread envelope (parent, surrounding chat and prior replies, which "
+        "kiro-cli persists into its own session file), and every stored reply "
+        "and quoted parent on its way out of the sidecar to the browser.",
+    ),
+    (
         "Steering file metadata",
         "dashboard/handlers/steering.py",
         "First-heading descriptions and display paths in the /api/steering listing "

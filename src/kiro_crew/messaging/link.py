@@ -104,6 +104,10 @@ _TELEMETRY_LOCAL_PREFIXES: tuple[tuple[str, str], ...] = (
     ("taskrunner", "taskrunner"),
     ("secretary", "secretary"),
     ("side", "side"),
+    # A reply thread on a crewmate chat message (``dashboard/chat_threads.py``),
+    # keyed ``thread:<slot>:<mid>``. Its own label, as ``side`` has, so thread
+    # turns never fold into ``other``.
+    ("thread", "thread"),
     ("wf-pool", "workflow_pool"),
     ("wf-author", "workflow_author"),
     # A workflow STAGE's own session (``wf:<run_id>:<n>``, built by

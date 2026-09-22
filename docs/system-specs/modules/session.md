@@ -1269,6 +1269,10 @@ The `side:` prefix is included so
 `/side` conversations never resume across KiroCrew restarts — each cold-start
 triggers `is_first_turn=True` in `build_side_message` which re-seeds the
 parent snapshot + accumulated side history.
+The `thread:` prefix (a reply thread on a crewmate chat message,
+[history](history.md#reply-threads-on-crewmate-chat-messages-dashboardchat_threadspy))
+is included for the same reason: `build_thread_message` re-seeds the whole
+envelope on a cold session.
 
 **Lifecycle:**
 - `get_or_create()`: looks up mapping → if found and `.json` file exists,

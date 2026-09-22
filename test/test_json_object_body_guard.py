@@ -159,6 +159,9 @@ _CAP_REASONS = {
 _CAP_REGISTER: dict[str, tuple[str, str]] = {
     # Pre-existing capped sites -- the bounded read's live consumers.
     "chat_pins.py::api_chat_pins_create": ("<default>", _BOUNDED_BY_DEFAULT),
+    # A thread reply is one text field (capped at 32 KiB by the handler) plus a
+    # slot key, so the shared default ceiling is the right one.
+    "chat_threads.py::api_chat_thread_reply": ("<default>", _BOUNDED_BY_DEFAULT),
     # Voice config is a flat set of short scalars (provider name, voice name,
     # rate, paths) and voice synthesis takes one reply's text, which the panel
     # already truncates well below the shared default. Neither has a legitimate

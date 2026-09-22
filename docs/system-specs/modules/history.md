@@ -924,6 +924,129 @@ inner JSONL fallback; only an absent replay requests fallback construction.
 5. User returns → new session with history re-injected
 6. After 10+ messages → background consolidation → structured memory updated
 
+## Reply Threads on Crewmate Chat Messages (`dashboard/chat_threads.py`)
+
+A **thread** is the set of replies attached to ONE message of a crewmate's chat --
+a member-mode slot (`slot.mode == members.DM_SLOT_MODE`) -- addressed by that
+message's durable `meta.mid`. "Thread" is only ever this reply thread; the main
+conversation is the chat. Any message, the user's or the crewmate's, can carry
+one.
+
+**Storage.** Replies live in a sidecar beside the slot's transcript,
+`ConversationLog.threads_sidecar_path(key)` =
+`<sessions dir>/.threads/<safe key>.json`, keyed by the slot's transcript key
+(`chat_utils.slot_history_key`). Shape: `{"version": 1, "threads": {<mid>:
+[{"id", "role": "user"|"assistant", "content", "ts"}, ...]}}`. It is a third
+sidecar next to `.summaries` and `.intents`, and its own file for the reason
+each of those is: it has its own writer (a reply landing) and no mtime contract
+with the transcript -- a reply must survive every later append to the main chat,
+so nothing about the session file's signature ever invalidates it. Replies
+never enter `slot.messages` or the JSONL, so the transcript read paths, the
+frozen-prefix save model and consolidation are untouched. The store is owned by
+`ConversationLog.read_threads` / `append_thread_reply`: the read-modify-write
+runs under the transcript's own `_locked(key)` -- the lock `delete_session`
+unlinks the sidecar under -- and REFUSES (`"missing"`) when no transcript
+exists, for the reason `set_cached_intent_summary` gives: a turn holds no lock
+while its model call is in flight, and an unconditional write landing after a
+delete would recreate the sidecar and resurrect a chat the user was told is
+gone. The same rule makes a chat younger than its first flush answer 409
+`transcript_missing` ("try again in a moment"). A reply is also admitted against
+ONE transcript: the handler captures the metadata line's `created_at`
+(`thread_transcript_identity`) before its first await and both appends carry it
+(`expected_created_at`); a chat deleted and recreated under its deterministic
+key while the turn was in flight answers `"replaced"` (409
+`transcript_replaced` / a plain failure frame) instead of receiving the old
+chat's reply -- the same identity `chat_persistence` uses to tell "deleted and
+recreated" apart, and absent on either side it falls through to the existence
+check so a pre-field transcript is not refused. Writes are `atomic_write`. A
+sidecar whose bytes are not a thread map raises `ThreadStoreUnreadable` and is
+NEVER overwritten (the three routes answer 503 `threads_unavailable`; a turn
+publishes a plain failure frame); rows of the wrong shape drop one by one. One
+thread holds at most 500 replies (`thread_full`), one chat's sidecar at most
+5 000 across every thread (`threads_full` -- the whole-file bound, since the
+panel reads the file whole), and the crewmate's stored reply is clipped at
+64 000 characters with a `[reply clipped]` marker (the streamed frames carried
+the whole text). `delete_session` takes the sidecar with the transcript
+all-or-nothing, the way it takes the attachments directory (moved aside in one
+rename before the transcript goes, moved back if the unlink fails, purged only
+afterwards) -- replies are primary content, so a delete that reported success
+while the sidecar stayed behind would be a lie; the summary caches keep their
+best-effort unlink. **Threads do not travel**: a fork, a
+transfer and an export copy the transcript and leave the sidecar behind. That is
+a decision, not an omission -- replies are primary data that cannot regenerate,
+unlike the summary caches, and the fork/transfer/export paths carry a
+transcript's rows, not its sidecars; a copied chat starts with no threads, and
+the original keeps its own. Carrying them is a later, separate change. Assistant prose
+is re-redacted at every output boundary (`_redacted_reply`), as pins re-redact
+their previews.
+
+**API.** All three answer 404 `slot_not_found` for a missing slot or a foreign
+app caller (anti-enumeration, App Kit §5.2) and 409 `not_crewmate_chat` for a
+slot that is not a crewmate's chat.
+
+- `GET /api/chat/threads?slot=<key>` -- `{"threads": {<mid>: {"count",
+  "last_reply_ts", "participants": [roles, first-appearance order]}}}`, the
+  footer data under a bubble. A separate read, deliberately NOT folded into
+  `GET /api/chat/slots/{slot}`: the transcript read path stays unchanged and the
+  payload is small enough to fetch beside it.
+- `GET /api/chat/threads/{mid}?slot=<key>` -- `{"parent": {mid, role, content,
+  ts}, "replies": [...], "in_flight": bool}`. 404 `parent_not_found` when the
+  mid is no longer in the chat (memory window first, then the chained disk
+  transcript, by the same rule `api_chat_slot_detail` reads).
+- `POST /api/chat/threads/{mid}/reply` `{slot_key, text}` -- stores the user's
+  reply, broadcasts it, starts the crewmate's turn and answers **202**
+  `{reply, run_id}` at once. 400 `empty_reply`, 413 `reply_too_long` (32 KiB),
+  409 `thread_turn_in_flight` while the crewmate is still replying in THAT
+  thread (a reply landing mid-turn would be answered by nothing; the panel
+  disables its send meanwhile), 409 `thread_full`, 409 `threads_full`, 409
+  `transcript_missing`, 409 `transcript_replaced`,
+  503 `threads_unavailable` (no conversation log, an unreadable sidecar, or a
+  lock timeout). The in-flight reservation is taken with no await between the
+  check and the mark -- BEFORE the store write suspends -- so two replies racing
+  through it (a double-click) run one turn; every refusal after the mark
+  releases it.
+
+**The crewmate's turn.** `_run_thread_turn` is the side turn's shape
+([side](side.md)) without its steer/queue ledger: resolve the slot's agent
+through `resolve_agent_bindings`, run in the thread's own isolated session
+`thread:<slot>:<mid>` (a `_STATELESS_PREFIXES` member, so it never resumes
+across restarts -- see [session](session.md); `sel._infer_source` classifies it
+as the dashboard surface and `messaging.link._TELEMETRY_LOCAL_PREFIXES` labels
+it `thread`), and stream through `stream_and_collect`. The tool
+posture is the side chat's, for the side chat's reason -- the thread panel has
+no approval card to fall back to: on a harness in `ACP_BACKENDS_SIDE_READONLY`
+the turn runs the derived `<agent>--readonly` spec under `READ_ONLY`; elsewhere
+`REJECT_ALL`. Actions go through the main chat, and the boundary prompt says so.
+The envelope (`build_thread_message`) is always sent whole (the
+instructions, up to 6 chat messages before the parent as background, the parent
+itself, the thread so far, the boundary, the reply): a thread turn never reuses
+a session -- the one it acquires is released and destroyed in its `finally`, so
+every reply cold-starts under the agent, project and derived spec resolved that
+turn, and a slot whose project or agent changed between two replies is never
+served by a session bound to the old ones. The parent lookup reads the
+transcript by `api_chat_slot_detail`'s rule, the idle zero-count disk
+reconciliation included, so a parent only disk holds is found. The crewmate's memory is not injected into a thread turn (not done;
+the crewmate's agent spec is). The answer is redacted, clipped, appended to the sidecar as
+an `assistant` reply and broadcast; an empty answer becomes the same visible
+read-only boundary line the side chat shows. A reply the store refuses (the
+thread filled up, or the chat was deleted, while the model was writing) is
+published as the failure it is -- a `final` + `is_error` frame with no `reply`
+record -- never as a reply. A signed-out harness is recognised by its error's
+class name (the ACP type lives behind the agent-SDK import boundary) and
+answered with `host_auth.signed_out_message`, latching the readiness service
+signed-out as the main chat does.
+
+**Wire.** `ws.broadcast_thread_reply` emits owner-only `chat.thread_reply`
+frames `{slot, mid, run_id, role, content, ts, final?, is_error?, reply?}`: the
+user's reply once, the crewmate's reply as streamed deltas grouped by `run_id`
+and a terminal `final` frame carrying the stored `reply` record. A frame with a
+`slot` field is a tier-1 slot-scoped WS event. Failure arms (the signed-out
+harness, `ReadOnlySpecError`, an unreadable sidecar, prompt-busy, anything else)
+always send a plain-language `final` + `is_error` frame, so the panel never waits
+on a reply that will not come; none of those is persisted. Only a failure a retry
+can cure says "Try again": a refused spec points at the main chat, an unreadable
+sidecar says the reply was not kept.
+
 ## Inline Image Attachments (`chat_attachments.py`)
 
 A message's inline images are session-scoped content and are stored with its

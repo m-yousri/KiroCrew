@@ -379,6 +379,14 @@ _FLOCK_ACQUIRE_TIMEOUT_S = 10.0
 _FLOCK_POLL_INTERVAL_S = 0.05
 
 
+class ThreadStoreUnreadable(ValueError):
+    """A reply-thread sidecar holds bytes that are not a thread map.
+
+    Raised by :meth:`ConversationLog.read_threads` instead of reading the file
+    as empty, so a writer never replaces damaged data with an empty map.
+    """
+
+
 class HistoryLockTimeout(TimeoutError):
     """Raised when the cross-process session lock cannot be acquired in time.
 
@@ -1938,6 +1946,108 @@ class ConversationLog:
                 }
             ),
         )
+
+    def threads_sidecar_path(self, key: str) -> Path:
+        """Sidecar path for a session's reply threads (``dashboard/chat_threads.py``).
+
+        A third sidecar beside the summary caches, for the same reason each of
+        those is its own file: the thread store has its own writer (a reply
+        landing) and no mtime contract with the transcript -- a reply must
+        survive every later append to the main chat, so it is never invalidated
+        by the session file's signature. Public because the thread store lives
+        outside this module; the transcript delete removes it with the others.
+        """
+        return self._dir / ".threads" / f"{_safe_key(key)}.json"
+
+    def read_threads(self, key: str) -> dict[str, list[dict[str, Any]]]:
+        """The reply-thread map of *key*'s sidecar (``{mid: [reply, ...]}``).
+
+        A missing sidecar reads as empty. Unreadable bytes -- torn JSON, a wrong
+        shape -- raise :class:`ThreadStoreUnreadable` instead of reading as empty,
+        because the one caller that writes would otherwise replace the damaged
+        file with an empty map and lose every reply it held. Rows and threads of
+        the wrong shape are dropped individually; only the document as a whole
+        refuses.
+        """
+        path = self.threads_sidecar_path(key)
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return {}
+        except (OSError, ValueError) as exc:
+            raise ThreadStoreUnreadable(f"thread sidecar unreadable: {path}") from exc
+        threads = raw.get("threads") if isinstance(raw, dict) else None
+        if not isinstance(threads, dict):
+            raise ThreadStoreUnreadable(f"thread sidecar has no threads map: {path}")
+        out: dict[str, list[dict[str, Any]]] = {}
+        for mid, replies in threads.items():
+            if isinstance(mid, str) and isinstance(replies, list):
+                out[mid] = [r for r in replies if isinstance(r, dict)]
+        return out
+
+    def thread_transcript_identity(self, key: str) -> str | None:
+        """The transcript's ``created_at`` metadata, or ``None`` when absent.
+
+        The identity :meth:`append_thread_reply` checks a reply against; read at
+        admission, before any await, and handed back at the write.
+        """
+        created = self.get_metadata(key).get("created_at")
+        return created if isinstance(created, str) and created else None
+
+    def append_thread_reply(
+        self,
+        key: str,
+        mid: str,
+        reply: dict[str, Any],
+        *,
+        max_replies: int,
+        max_total: int,
+        expected_created_at: str | None = None,
+    ) -> str:
+        """Append *reply* to the thread on *mid* in *key*'s sidecar.
+
+        Returns ``"ok"``, ``"full"`` (the thread already holds *max_replies*),
+        ``"sidecar_full"`` (the sidecar already holds *max_total* replies across
+        every thread -- the whole-file bound, since the panel reads the file
+        whole and a per-thread cap alone leaves it unbounded in the number of
+        threads), ``"missing"`` (no transcript for *key*), or ``"replaced"``
+        (the transcript is not the one the reply was admitted against). The
+        identity is the metadata line's ``created_at`` -- minted when a
+        transcript is created, carried through verbatim by a rewrite -- so a
+        member chat deleted and recreated under its deterministic key while a
+        turn was in flight is told apart from the chat the reply belongs to,
+        exactly as ``chat_persistence`` tells "deleted and recreated" apart.
+        Callers capture it with :meth:`thread_transcript_identity` at admission
+        and pass it back here; ``None`` on either side falls through to the
+        existence check alone, so a transcript whose metadata predates the
+        field is not refused. The read-modify-write runs
+        under :meth:`_locked` -- the same lock :meth:`delete_session` unlinks the
+        sidecar under -- and refuses when the transcript is gone, for the reason
+        :meth:`set_cached_intent_summary` gives: a turn holds no lock while its
+        model call is in flight, and an unconditional write landing after a
+        delete would recreate the sidecar and resurrect a conversation the user
+        was told is gone. Raises :class:`ThreadStoreUnreadable` on a damaged
+        sidecar (never overwritten) and :class:`HistoryLockTimeout` when the lock
+        cannot be taken. Blocking; callers run it off the event loop.
+        """
+        with self._locked(key):
+            if not self._path(key).exists():
+                return "missing"
+            if expected_created_at is not None:
+                current = self.thread_transcript_identity(key)
+                if current is not None and current != expected_created_at:
+                    return "replaced"
+            threads = self.read_threads(key)
+            if sum(len(r) for r in threads.values()) >= max_total:
+                return "sidecar_full"
+            replies = threads.setdefault(mid, [])
+            if len(replies) >= max_replies:
+                return "full"
+            replies.append(reply)
+            path = self.threads_sidecar_path(key)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write(path, json.dumps({"version": 1, "threads": threads}))
+            return "ok"
 
     def _intent_summary_cache_path(self, key: str) -> Path:
         """Sidecar path for a session's cached intent-structured summary.

@@ -13,6 +13,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import os
 import time as _time
 from collections.abc import Callable, Iterator
 from datetime import datetime
@@ -1269,14 +1270,60 @@ class SessionMetadataProjection:
                         exc_info=True,
                     )
                     return False
+                # The reply threads are primary content too (replies cannot be
+                # regenerated, unlike the summary caches below), so the sidecar
+                # takes the same all-or-nothing route: moved aside in ONE rename
+                # before the transcript goes, moved back if the transcript's
+                # unlink fails, purged only once nothing references it. A
+                # best-effort unlink after the transcript could leave the
+                # replies behind while the delete reported success.
+                threads_path = self._log.threads_sidecar_path(key)
+                threads_staged: Path | None = None
+                if threads_path.exists():
+                    threads_staged = threads_path.with_name(
+                        f"{threads_path.name}.deleting-{os.getpid()}"
+                    )
+                    try:
+                        os.replace(threads_path, threads_staged)
+                    except OSError:
+                        if staged is not None:
+                            restore_staged_attachments(staged, path.parent, path.stem)
+                        _HISTORY_LOGGER.warning(
+                            "delete_session: cannot move the thread sidecar aside for key=%s, "
+                            "not deleting",
+                            key,
+                            exc_info=True,
+                        )
+                        return False
                 try:
                     path.unlink(missing_ok=True)
                 except OSError:
                     if staged is not None:
                         restore_staged_attachments(staged, path.parent, path.stem)
+                    if threads_staged is not None:
+                        try:
+                            os.replace(threads_staged, threads_path)
+                        except OSError:
+                            _HISTORY_LOGGER.warning(
+                                "delete_session: thread sidecar left aside at %s for key=%s",
+                                threads_staged,
+                                key,
+                                exc_info=True,
+                            )
                     return False
                 if staged is not None:
                     purge_staged_attachments(staged)
+                if threads_staged is not None:
+                    try:
+                        threads_staged.unlink(missing_ok=True)
+                    except OSError:
+                        # Nothing references the staged bytes any more: an
+                        # orphan for an operator, never a served reply.
+                        _HISTORY_LOGGER.warning(
+                            "delete_session: staged thread sidecar %s not removed",
+                            threads_staged,
+                            exc_info=True,
+                        )
                 for sidecar in (
                     self._log._summary_cache_path(key),
                     self._log._intent_summary_cache_path(key),

@@ -1,4 +1,4 @@
-import { describe, it, vi, beforeEach } from 'vitest'
+import { describe, it, vi, beforeEach, expect } from 'vitest'
 import { render, screen, act } from '@testing-library/react'
 import DiffBlock from '../components/DiffBlock'
 
@@ -72,5 +72,39 @@ describe('DiffBlock streaming', () => {
     await flush()
     render(<DiffBlock code={'--- /a/b.py\n+++ /a/b.py'} complete={false} />)
     await flush()
+  })
+  /** The GATE: an unfinished block must not reach Pierre at all. Pierre re-parses
+   *  and re-tokenizes the WHOLE patch per frame (its cache key is content-derived,
+   *  so every frame misses), which a streamed diff would otherwise pay once per
+   *  chunk. `pre.pierre-plain` is the app-owned stand-in, and the header path it
+   *  prints is the untouched one -- the Pierre path shortens headers, so the full
+   *  path doubles as proof of WHICH path rendered. */
+  it('renders a streaming patch as plain text, keeping the original header paths', async () => {
+    await warmPierre()
+    const { container } = render(<DiffBlock code={fullPatch} complete={false} streaming />)
+    await flush()
+    // Scoped to this render: the cases above deliberately leave their trees
+    // mounted, so a document-wide query can read THEIR stand-in instead.
+    const plain = container.querySelector('pre.pierre-plain')
+    expect(plain).not.toBeNull()
+    // The full path survives: a basename-shortened header would not apply if copied.
+    expect(plain?.textContent).toContain('--- /home/user/example/src/greet.py')
+  })
+
+  /** jsdom has no `Worker`, so Pierre's real surface never mounts here -- the pool
+   *  reports `unsupported` and Pierre's own wrapper falls back to the SAME plain
+   *  stand-in. So "the stand-in is gone" cannot tell the two paths apart. The full
+   *  header path can: only the Pierre path shortens headers
+   *  (`basenamePatchHeaders`), so the untouched path is present while frames arrive
+   *  and absent once the block is handed to Pierre. Holds either way, and deleting
+   *  the gate flips the first assertion. */
+  it('hands the patch to Pierre only once the block is complete', async () => {
+    await warmPierre()
+    const { container, rerender } = render(<DiffBlock code={fullPatch} complete={false} streaming />)
+    await flush()
+    expect(container.textContent).toContain('--- /home/user/example/src/greet.py')
+    rerender(<DiffBlock code={fullPatch} complete />)
+    await flush()
+    expect(container.textContent).not.toContain('--- /home/user/example/src/greet.py')
   })
 })

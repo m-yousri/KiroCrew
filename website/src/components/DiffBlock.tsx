@@ -5,6 +5,7 @@ import { fileReadUrl } from '../utils/fileReadUrl'
 import { isSafePath } from '../utils/safePath'
 import { basenamePatchHeaders } from '../utils/diffUtils'
 import { PierrePatch } from '../pierre'
+import { PlainCodeFallback } from '../pierre/PlainCodeFallback'
 import { PIERRE_COMPACT_HEADER_CSS, PIERRE_WRAP_NO_HSCROLL_CSS, PIERRE_SEPARATOR_BG_CSS, PIERRE_FOLD_HANDLE_GUTTER_CSS } from '../pierre/config'
 import { HOVER_NONE_ACTIONS_ROW_CLS } from '../utils/touchActions'
 import { useDiffSplit } from '../hooks/useDiffSplit'
@@ -213,6 +214,18 @@ export default memo(function DiffBlock({ code, complete, onFileOpen, pathHint, o
   // stationary, and a header that changes height while someone is reading is not.
   const reserveOpen = Boolean(onFileOpen && probePath && isSafePath(probePath))
 
+  // Frames are still arriving: render the patch as plain text and mount Pierre
+  // only once the block is final. Pierre re-parses and re-tokenizes the WHOLE
+  // patch on every frame -- `contentCacheKey` is content-derived, so each frame
+  // is a cache MISS -- which is a main-thread parse plus a fresh token set per
+  // chunk. On a long streamed diff that burst is what shows up as a renderer
+  // memory spike and a laggy click, and every intermediate token set is thrown
+  // away the moment the next chunk lands. `CodeBlock` already gates its Pierre
+  // mount on `complete` for exactly this reason; this is the diff half of that
+  // rule. The stand-in is `PlainCodeFallback`, whose metrics match Pierre's, so
+  // the swap at completion does not move the reader.
+  const standInForStream = !complete
+
   const headerControls = () => (
     <span className={`relative z-10 flex items-center gap-1 opacity-0 group-hover/diff:opacity-100 group-focus-within/diff:opacity-100 transition-opacity ${HOVER_NONE_ACTIONS_ROW_CLS}`}>
       {reserveOpen && (
@@ -284,13 +297,19 @@ export default memo(function DiffBlock({ code, complete, onFileOpen, pathHint, o
             `overflow-hidden` and push the rest over the patch body. Pierre's own
             header band — the thing this stands in for — is `min-height` for the
             same reason. */}
-        {plain && (
+        {(plain || standInForStream) && (
           <div className={`flex items-center justify-between gap-2 min-h-8 pr-2 border-b border-border text-[12px] text-muted ${onFold ? 'pl-8' : 'pl-3'}`}>
             <span className="truncate font-mono">{headerPath ? headerPath.split('/').pop() : ''}</span>
             {headerControls()}
           </div>
         )}
-        <PierrePatch patch={plain ? code : displayPatch} options={options} renderHeaderMetadata={headerControls} />
+        {/* `code`, never `displayPatch`, on the plain path: the basename rewrite
+            is invisible only where Pierre CONSUMES the `--- `/`+++ ` lines to
+            draw its header. Printed as text it would hand the reader (and the
+            Copy button) a patch whose paths no longer apply. */}
+        {standInForStream
+          ? <PlainCodeFallback text={code} />
+          : <PierrePatch patch={plain ? code : displayPatch} options={options} renderHeaderMetadata={headerControls} />}
         {!complete && <div className="px-3 py-1 text-muted text-[12px] italic animate-pulse">{i18nT('components.diffBlock.generating_diff')}</div>}
       </div>
     </div>

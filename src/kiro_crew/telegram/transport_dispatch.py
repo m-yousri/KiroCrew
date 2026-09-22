@@ -1587,12 +1587,23 @@ class TelegramDispatcher:
 
         class _Surface:
             label = "telegram"
+            # The CHAT, not the ``thread`` also bound above. Under
+            # ``dm_scope = "unified"`` every allow-listed person's DM collapses onto
+            # one session key and only the chat still tells them apart; a forum
+            # Topic never collapses (``build_dm_session_key`` keeps a forum route's
+            # full bucket under any scope), so the Topic is already in the session
+            # key and adding it here would only stop the unthreaded ``/stop``
+            # surface from finding the receipt its own chat owns.
+            receipt_key = str(chat_id)
 
             async def send_receipt(self, body: str) -> Any | None:
                 return await reply(chat_id, body, thread=thread)
 
-            async def edit_receipt(self, msg_id: Any, body: str) -> None:
-                await client.edit_message(chat_id, msg_id, body)
+            async def edit_receipt(self, msg_id: Any, body: str) -> bool:
+                # The client answers a non-2xx with False rather than raising, and
+                # the registry retires a receipt on this answer, so discarding it
+                # presents a rate-limited edit as a written record.
+                return await client.edit_message(chat_id, msg_id, body)
 
         return _Surface()
 

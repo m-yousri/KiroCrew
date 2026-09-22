@@ -55,6 +55,9 @@ class _Surface:
     """A receipt surface with its address already bound (what a channel supplies)."""
 
     label = "fake"
+    #: The conversation the bubble lives in, which is what the registry keys on:
+    #: a session key is shared by two chats under a unified DM scope.
+    receipt_key = "conv-1"
 
     def __init__(self) -> None:
         self.sent: list[str] = []
@@ -139,7 +142,7 @@ class TestStopRunningTurn:
         _stop(sessions, queue, surface)
         assert sessions.cleared == ["s"]
         assert surface.edits == [(42, receipt_text(["what time is it"], cancelled=True))]
-        assert not queue.has_receipt("s")
+        assert not queue.has_receipt("s", surface.receipt_key)
 
     def test_clear_queue_and_the_finalize_share_one_lock_hold(self) -> None:
         """The drain takes the same lock across dequeue + flip.

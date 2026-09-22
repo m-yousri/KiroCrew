@@ -1096,9 +1096,29 @@ class WebexDispatcher:
         client = cast("WebexClient", self.client)
         room_id = inbound.room_id
         parent_id = self._reply_parent(inbound) or None
+        # The KEY takes the thread root from the inbound itself; only SENDING uses
+        # ``_reply_parent``. Where a reply goes is a live setting, but which thread
+        # a posted bubble IS was fixed when it was posted -- and ``_reply_parent``
+        # is filtered by the live ``webex.reply_in_thread``, so a toggle between
+        # enqueue and drain would change the key of a receipt that already exists,
+        # the drain's lookup would miss it, and a bubble whose messages are gone
+        # would stay on "⏳ Queued" for good. The raw root is also the identity the
+        # drain itself collapses entries by (``webex_parent_id``), so keying on it
+        # makes the receipt and the queue entry agree on what one conversation is.
+        thread_root = inbound.parent_id or ""
 
         class _Surface:
             label = "webex"
+            # Room AND thread, because a Webex space's threads are distinct
+            # conversations that do NOT separate on the session key: a space is
+            # keyed ``space:{id}``, so two threads share it, and a room-only
+            # receipt key would put thread B's text in thread A's bubble. The
+            # queue entry carries ``webex_parent_id`` for the same reason. The
+            # room alone is not dropped either: ``dm_scope = "unified"`` collapses
+            # each allowed person's own DM room onto one session key.
+            # Not ``person_email``: this value is logged, and opaque ids are not
+            # personal identifiers.
+            receipt_key = f"{room_id}:{thread_root}"
 
             async def send_receipt(self, body: str) -> Any | None:
                 # A receipt quotes the message it queued, so it carries user text
@@ -1107,8 +1127,12 @@ class WebexDispatcher:
                     room_id, webex_display_safe(body), parent_id=parent_id
                 )
 
-            async def edit_receipt(self, msg_id: Any, body: str) -> None:
-                await client.edit_message(str(msg_id), room_id, webex_display_safe(body))
+            async def edit_receipt(self, msg_id: Any, body: str) -> bool:
+                # Webex accepts at most ten edits per message and answers the
+                # eleventh with 400, which the client reports as False rather than
+                # raising. The registry retires a receipt on this answer, so
+                # discarding it strands the bubble on "Queued" with no retry left.
+                return await client.edit_message(str(msg_id), room_id, webex_display_safe(body))
 
         return _Surface()
 
@@ -1217,11 +1241,29 @@ class WebexDispatcher:
                     # keep its attachments, or a burst past the collapse cap
                     # silently loses the files of everything after the cap.
                     self.sessions.enqueue(session_key, str(time.time()), rtext, force=True, **rkw)
-                if texts:
+                # ``convo is not None`` whenever ``texts`` is non-empty -- the first
+                # dequeued entry sets both -- so the conjunct is the type checker's,
+                # not a second condition.
+                if texts and convo is not None:
                     await self._queue.flip_answering_locked(
                         session_key,
-                        self._receipt_surface(inbound),
-                        texts,
+                        # ``convo``, not ``inbound``: the receipt belongs to the
+                        # conversation whose entries were just dequeued, and that is
+                        # the FIRST entry's room and thread -- which a shared unified
+                        # key, or ``reply_in_thread``, makes different from the chat
+                        # that merely opened the finished turn. Keyed on the opener,
+                        # the lookup misses and the bubble whose messages are gone
+                        # stays on "Queued".
+                        self._receipt_surface(
+                            replace(inbound, room_id=convo[0], parent_id=convo[1])
+                        ),
+                        # What the BUBBLE shows, not the raw message: an
+                        # uncaptioned attachment was registered under the
+                        # placeholder, so passing its empty text here matches
+                        # nothing and the registry reads the receipt as
+                        # unanswered -- leaving an answered attachment on
+                        # "Queued". The raw texts still build the turn body below.
+                        [t or _QUEUED_ATTACHMENT_LABEL for t in texts],
                         len(remainder),
                     )
             if not texts:

@@ -45,6 +45,13 @@ class _Client:
     def __init__(self) -> None:
         self.sent: list[tuple[str, str, str]] = []
         self.updates: list[tuple[str, str]] = []
+        #: Same edits, but WITH the conversation they were addressed to. An edit
+        #: reaching the wrong chat is invisible in ``updates`` alone, and that is
+        #: the whole failure mode a shared receipt registry produced.
+        self.addressed_updates: list[tuple[str, str, str]] = []
+        #: The real client reports a non-2xx (a rate limit) as False, not by
+        #: raising, and the registry retires a receipt on that answer.
+        self.edit_ok = True
         self._next_id = 0
 
     async def send_message(self, conversation_id, content, service_url):
@@ -54,7 +61,8 @@ class _Client:
 
     async def update_message(self, conversation_id, activity_id, content, service_url):
         self.updates.append((activity_id, content))
-        return True
+        self.addressed_updates.append((conversation_id, activity_id, content))
+        return self.edit_ok
 
     async def send_typing(self, conversation_id, service_url) -> None:
         return None
@@ -145,24 +153,48 @@ class _Sessions:
         return contextlib.nullcontext()
 
 
-def _cfg() -> SimpleNamespace:
+def _cfg(dm_scope: str = "per_user") -> SimpleNamespace:
     return SimpleNamespace(
         messaging=SimpleNamespace(
-            queue_mode="steer", dm_scope="per_user", idle_reset_minutes=0, daily_reset_hour=-1
+            queue_mode="steer", dm_scope=dm_scope, idle_reset_minutes=0, daily_reset_hour=-1
         ),
         agent=SimpleNamespace(default_agent="kirocrew", approval_mode="interactive"),
         teams=SimpleNamespace(soft_threshold_pct=80, hard_threshold_pct=95),
     )
 
 
-def _dispatcher(sessions, client) -> TeamsDispatcher:
+def _dispatcher(sessions, client, *, dm_scope: str = "per_user") -> TeamsDispatcher:
     d = TeamsDispatcher(
         sessions=sessions,
         ctx_builder=SimpleNamespace(hooks=SimpleNamespace(auto_approve_subagent_spawn=False)),
-        cfg=_cfg(),
+        cfg=_cfg(dm_scope),
     )
     d.client = client
     return d
+
+
+class TestReceiptSurfaceReportsTheEdit:
+    """The receipt surface hands the registry the client's own answer.
+
+    The client reports a non-2xx as False rather than raising, and the registry
+    retires a receipt -- destroying the bubble's only handle -- on that answer.
+    Discarding it presents a rate-limited edit as a written record, so the bubble
+    stays on "Queued" for good with no retry left to rescue it.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_refused_edit_is_reported_and_an_accepted_one_is_too(self) -> None:
+        client = _Client()
+        d = _dispatcher(_Sessions(_Provider()), client)
+        surface = d._receipt_surface(_inbound("hi"))
+
+        client.edit_ok = False
+        refused = await surface.edit_receipt("act-1", "body")
+        client.edit_ok = True
+        accepted = await surface.edit_receipt("act-1", "body")
+
+        assert refused is False, "a refused edit was reported as written"
+        assert accepted is True, "an accepted edit was not reported as written"
 
 
 class TestStop:
@@ -245,6 +277,147 @@ class TestQueueReceipt:
         await d._handle_stop(inbound)
 
         assert any("Cancelled" in body for _, body in client.updates)
+
+
+class TestTwoSendersShareOneSessionKey:
+    """``dm_scope = "unified"`` makes one session key carry two people's chats.
+
+    Driven through the REAL ``_enqueue_with_receipt`` and the REAL
+    ``_receipt_surface``, because the collision lived in the registry those two
+    reach: a fake queue that keyed itself correctly would pass while production
+    still edited the wrong chat.
+    """
+
+    OTHER_EMAIL = "someone.else@example.com"
+    OTHER_CONV = "CONV-OTHER"
+
+    @staticmethod
+    def _other(text: str) -> TeamsInbound:
+        """A second allow-listed person, in their OWN personal chat."""
+        return TeamsInbound(
+            conversation_id=TestTwoSendersShareOneSessionKey.OTHER_CONV,
+            conversation_type="personal",
+            service_url=_SVC,
+            text=text,
+            user_email=TestTwoSendersShareOneSessionKey.OTHER_EMAIL,
+            activity_id="act-2",
+        )
+
+    @pytest.mark.asyncio
+    async def test_the_two_senders_really_do_share_one_session_key(self) -> None:
+        """The premise. Without this the rest of the class proves nothing."""
+        d = _dispatcher(_Sessions(_Provider()), _Client(), dm_scope="unified")
+        assert d._session_key(_EMAIL) == d._session_key(self.OTHER_EMAIL)
+
+    @pytest.mark.asyncio
+    async def test_each_sender_gets_their_own_receipt_in_their_own_chat(self) -> None:
+        sessions = _Sessions(_Provider())
+        client = _Client()
+        d = _dispatcher(sessions, client, dm_scope="unified")
+        key = d._session_key(_EMAIL)
+
+        await d._enqueue_with_receipt(key, _inbound("mine"), "mine")
+        await d._enqueue_with_receipt(key, self._other("theirs"), "theirs")
+
+        conversations = [conv for conv, _body, _svc in client.sent]
+        assert conversations == [
+            "CONV",
+            self.OTHER_CONV,
+        ], "the second sender got no receipt of their own"
+        assert client.updates == [], (
+            "neither receipt is an edit of the other: they are different messages "
+            "in different chats"
+        )
+
+    @pytest.mark.asyncio
+    async def test_neither_senders_receipt_carries_the_others_message(self) -> None:
+        sessions = _Sessions(_Provider())
+        client = _Client()
+        d = _dispatcher(sessions, client, dm_scope="unified")
+        key = d._session_key(_EMAIL)
+
+        await d._enqueue_with_receipt(key, _inbound("my private thing"), "my private thing")
+        await d._enqueue_with_receipt(key, self._other("their question"), "their question")
+
+        for conv, body, _svc in client.sent:
+            other = "their question" if conv == "CONV" else "my private thing"
+            assert other not in body, f"{conv} was shown another person's message"
+
+        # And EVERY edit, attributed to the chat it was addressed to: an edit
+        # landing in the wrong chat is exactly how one person's text reached the
+        # other, and ``sent`` alone cannot see it.
+        assert client.addressed_updates or len(client.sent) == 2
+        for conv, _act, body in client.addressed_updates:
+            other = "their question" if conv == "CONV" else "my private thing"
+            assert other not in body, f"{conv} was edited to show another person's message"
+
+    @pytest.mark.asyncio
+    async def test_each_receipt_is_flipped_once_by_the_turn_that_answers_it(
+        self, monkeypatch
+    ) -> None:
+        """Teams defers the other sender and drains them in a LATER iteration.
+
+        So their receipt is flipped by their own turn. A drain that also flushed
+        still-queued conversations would flip their bubble on the FIRST iteration,
+        claiming a message is being answered while it is still sitting in the
+        queue -- which is why the ordering, not just the final set of records, is
+        what this asserts.
+        """
+        answering_at_each_drive: list[int] = []
+
+        async def _fake_drive(turn, **kw):
+            answering_at_each_drive.append(
+                sum(1 for _c, _a, body in client.addressed_updates if "Now answering" in body)
+            )
+
+        monkeypatch.setattr("kiro_crew.teams.transport_dispatch.drive_turn", _fake_drive)
+        monkeypatch.setattr(
+            "kiro_crew.teams.transport_dispatch.inbound_permitted", lambda _c: _true()
+        )
+        sessions = _Sessions(_Provider())
+        client = _Client()
+        d = _dispatcher(sessions, client, dm_scope="unified")
+        key = d._session_key(_EMAIL)
+        await d._enqueue_with_receipt(key, _inbound("mine"), "mine")
+        await d._enqueue_with_receipt(key, self._other("theirs"), "theirs")
+
+        sessions._busy = False
+        await d._drain_queue(key, _inbound("mine"))
+
+        assert answering_at_each_drive == [1, 2], (
+            "one receipt is flipped per drained turn, so the second chat's record "
+            "may not exist while its message is still queued"
+        )
+        answering = [conv for conv, _a, body in client.addressed_updates if "Now answering" in body]
+        assert sorted(answering) == sorted(
+            ["CONV", self.OTHER_CONV]
+        ), "each chat gets exactly one 'Now answering' record, in its own chat"
+
+    @pytest.mark.asyncio
+    async def test_one_senders_stop_closes_out_both_in_their_own_chats(self) -> None:
+        """``/stop`` clears the queue for both, so both get a record -- each at home.
+
+        The record has to land in the chat whose bubble it is: the person who typed
+        ``/stop`` cannot edit an activity id in someone else's chat.
+        """
+        sessions = _Sessions(_Provider())
+        client = _Client()
+        d = _dispatcher(sessions, client, dm_scope="unified")
+        key = d._session_key(_EMAIL)
+        await d._enqueue_with_receipt(key, _inbound("mine held"), "mine held")
+        await d._enqueue_with_receipt(key, self._other("theirs held"), "theirs held")
+
+        await d._handle_stop(self._other("/stop"))
+
+        cancelled = {
+            conv: body for conv, _act, body in client.addressed_updates if "Cancelled" in body
+        }
+        assert set(cancelled) == {
+            "CONV",
+            self.OTHER_CONV,
+        }, "a cleared queue left a bubble reading 'Queued' over deleted messages"
+        assert "theirs held" not in cancelled["CONV"]
+        assert "mine held" not in cancelled[self.OTHER_CONV]
 
 
 class TestCommandVocabulary:

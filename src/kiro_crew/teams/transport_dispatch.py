@@ -863,6 +863,11 @@ class TeamsDispatcher:
 
         class _Surface:
             label = "teams"
+            # The conversation id, which under ``dm_scope = "unified"`` is the only
+            # thing still telling two allow-listed people apart: the session key
+            # they share does not, and a receipt posted in one personal chat cannot
+            # be edited from the other.
+            receipt_key = conversation_id
 
             async def send_receipt(self, body: str) -> Any | None:
                 try:
@@ -873,8 +878,11 @@ class TeamsDispatcher:
                     logger.debug("Teams: queue receipt send failed", exc_info=True)
                     return None
 
-            async def edit_receipt(self, msg_id: Any, body: str) -> None:
-                await client.update_message(conversation_id, str(msg_id), body, service_url)
+            async def edit_receipt(self, msg_id: Any, body: str) -> bool:
+                # The client answers a non-2xx with False rather than raising, and
+                # the registry retires a receipt on this answer, so discarding it
+                # presents a rate-limited edit as a written record.
+                return await client.update_message(conversation_id, str(msg_id), body, service_url)
 
         return _Surface()
 

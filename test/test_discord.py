@@ -737,6 +737,29 @@ class TestParseCommand:
         assert parse_command("!new please") == "new"
 
 
+class TestReceiptSurfaceReportsTheEdit:
+    """The receipt surface hands the registry the client's own answer.
+
+    The client reports a non-2xx as False rather than raising, and the registry
+    retires a receipt -- destroying the bubble's only handle -- on that answer.
+    Discarding it presents a rate-limited edit as a written record, so the bubble
+    stays on "Queued" for good with no retry left to rescue it.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_refused_edit_is_reported_and_an_accepted_one_is_too(self) -> None:
+        d, client, _sess = _dispatcher({"U1"})
+        surface = d._receipt_surface("C1")
+
+        client.edit_ok = False
+        refused = await surface.edit_receipt("M1", "body")
+        client.edit_ok = True
+        accepted = await surface.edit_receipt("M1", "body")
+
+        assert refused is False, "a refused edit was reported as written"
+        assert accepted is True, "an accepted edit was not reported as written"
+
+
 class TestMidTurnOverride:
     def test_queue_override(self) -> None:
         assert parse_mid_turn_override("!queue do it later") == (

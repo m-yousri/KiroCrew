@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest import mock
@@ -237,18 +238,26 @@ class FakeCtx:
 class FakeClient:
     def __init__(self) -> None:
         self.sent: list[tuple[str, str]] = []
+        #: Same sends, but WITH the thread they were addressed to. A receipt posted
+        #: into the wrong thread is invisible in ``sent`` alone, because a space's
+        #: threads all carry the same room id.
+        self.sent_threads: list[tuple[str, str, str]] = []
         self.edits: list[tuple[str, str, str]] = []
+        #: Webex answers the eleventh edit of a message with 400, which the real
+        #: client reports as False rather than raising.
+        self.edit_ok = True
         self.deleted: list[str] = []
         self._next_id = 0
 
     async def send_message(self, conversation_id: str, markdown: str, **kw) -> str:
         self.sent.append((conversation_id, markdown))
+        self.sent_threads.append((conversation_id, str(kw.get("parent_id") or ""), markdown))
         self._next_id += 1
         return f"MSG{self._next_id}"
 
     async def edit_message(self, message_id: str, room_id: str, markdown: str) -> bool:
         self.edits.append((message_id, room_id, markdown))
-        return True
+        return self.edit_ok
 
     async def delete_message(self, message_id: str) -> None:
         self.deleted.append(message_id)
@@ -1986,6 +1995,236 @@ class TestOutboundRedaction:
 
         bodies = " ".join(m for (_c, m) in client.sent)
         assert "AKIAIOSFODNN7EXAMPLE" not in bodies.replace("*", "")
+
+
+class TestQueueReceiptThreadIdentity:
+    """Two threads of one space are two conversations on one session key.
+
+    A space is keyed ``space:{id}``, so its threads share the session key, and a
+    receipt keyed on the room alone would serve both from one bubble sitting in
+    whichever thread queued first. Driven through the REAL
+    ``_enqueue_with_receipt`` and ``_receipt_surface``.
+    """
+
+    @staticmethod
+    def _in_thread(parent_id: str, text: str) -> WebexInbound:
+        return WebexInbound(
+            person_email=_EMAIL,
+            room_id="SPACE1",
+            text=text,
+            room_type="group",
+            mentioned_people=("BOTID",),
+            parent_id=parent_id,
+        )
+
+    @pytest.mark.asyncio
+    async def test_each_thread_gets_its_own_receipt_in_its_own_thread(self) -> None:
+        sessions = FakeSessions(FakeProvider([]))
+        sessions._busy = True
+        client = FakeClient()
+        d = _dispatcher(sessions, FakeCtx(), client)
+        d.cfg = _cfg_queue()
+        key = "webex:kirocrew:group:space:SPACE1"
+
+        await d._enqueue_with_receipt(key, "in one", self._in_thread("THREAD1", "in one"))
+        await d._enqueue_with_receipt(key, "in two", self._in_thread("THREAD2", "in two"))
+
+        threads = [t for _room, t, body in client.sent_threads if "Queued" in body]
+        assert threads == [
+            "THREAD1",
+            "THREAD2",
+        ], "the second thread got no receipt of its own"
+        assert client.edits == [], "neither receipt is an edit of the other"
+
+    @pytest.mark.asyncio
+    async def test_the_drain_flips_the_thread_it_dequeued_not_the_opener(
+        self, monkeypatch, caplog
+    ) -> None:
+        """The drained conversation comes from the FIRST entry, not from ``inbound``.
+
+        A unified key, or ``reply_in_thread``, makes those different. Keyed on the
+        chat that merely opened the finished turn, the flip misses and the bubble
+        whose messages are gone stays on "Queued" for good.
+
+        A THIRD thread also queues, so the drain defers it. That matters: with
+        nothing deferred the consumed-receipt sweep would finalize the right bubble
+        by accident and hide the wrong lookup.
+        """
+
+        async def _noop(*a, **kw):
+            return None
+
+        monkeypatch.setattr("kiro_crew.webex.transport_dispatch.drive_turn", _noop)
+        sessions = FakeSessions(FakeProvider([]))
+        sessions._busy = True
+        client = FakeClient()
+        d = _dispatcher(sessions, FakeCtx(), client)
+        d.cfg = _cfg_queue()
+        key = "webex:kirocrew:group:space:SPACE1"
+
+        # THREAD2 queues mid-turn and owns a receipt there; THREAD3 queues after,
+        # so the drain collapses only THREAD2 and re-enqueues THREAD3.
+        await d._enqueue_with_receipt(key, "from two", self._in_thread("THREAD2", "from two"))
+        assert client.sent_threads[-1][1] == "THREAD2"
+        receipt_id = "MSG1"
+        await d._enqueue_with_receipt(key, "from three", self._in_thread("THREAD3", "from three"))
+
+        # The turn that finishes was opened in THREAD1.
+        sessions._busy = False
+        with caplog.at_level(logging.WARNING, logger="kiro_crew.messaging.queue_receipt"):
+            await d._drain_queue(self._in_thread("THREAD1", "opener"), key)
+
+        # A stranded-receipt warning here would be a FALSE alarm: the receipt is
+        # reachable, the drain just looked it up under the wrong conversation.
+        assert not [
+            r for r in caplog.records if r.levelno == logging.WARNING
+        ], "the flip resolved a conversation that owns no receipt"
+        flipped = [mid for mid, _room, body in client.edits if "Now answering" in body]
+        assert receipt_id in flipped, (
+            "the dequeued thread's receipt was never flipped: the drain resolved "
+            "the opener's conversation instead"
+        )
+
+    @pytest.mark.asyncio
+    async def test_an_answered_uncaptioned_attachment_is_not_left_queued(self, monkeypatch) -> None:
+        """The drain must name what the BUBBLE shows, not the raw message.
+
+        An uncaptioned attachment has no text, so the receipt was registered under
+        the placeholder. Passing the raw empty text as ``answered`` matches nothing,
+        and with an entry deferred the registry then reads this receipt as
+        unanswered and leaves it live -- so a file that WAS answered keeps reading
+        "Queued", and its next message re-grows the bubble with answered content.
+        """
+
+        async def _noop(*a, **kw):
+            return None
+
+        monkeypatch.setattr("kiro_crew.webex.transport_dispatch.drive_turn", _noop)
+        sessions = FakeSessions(FakeProvider([]))
+        sessions._busy = True
+        client = FakeClient()
+
+        # The drain replays the queued file, which asks the client to describe it.
+        async def _head(url: str) -> tuple[str, str, int]:
+            return ("report.pdf", "application/pdf", 12)
+
+        client.head_content = _head  # type: ignore[attr-defined]
+        d = _dispatcher(sessions, FakeCtx(), client)
+        d.cfg = _cfg_queue()
+        key = "webex:kirocrew:group:space:SPACE1"
+
+        attachment = WebexInbound(
+            person_email=_EMAIL,
+            room_id="SPACE1",
+            text="",
+            room_type="group",
+            mentioned_people=("BOTID",),
+            parent_id="THREAD2",
+            file_urls=("https://webexapis.com/v1/c/A",),
+        )
+        await d._enqueue_with_receipt(key, "", attachment)
+        receipt_id = "MSG1"
+        assert any(
+            webex_dispatch._QUEUED_ATTACHMENT_LABEL in body for _r, _t, body in client.sent_threads
+        ), "the receipt did not register the attachment under its placeholder"
+        # A THIRD thread queues, so the drain defers it. Without something
+        # deferred the fallback would finalize this bubble by accident.
+        await d._enqueue_with_receipt(key, "from three", self._in_thread("THREAD3", "from three"))
+
+        sessions._busy = False
+        await d._drain_queue(self._in_thread("THREAD1", "opener"), key)
+
+        flipped = [mid for mid, _room, body in client.edits if "Now answering" in body]
+        assert receipt_id in flipped, (
+            "the answered attachment's receipt is still reading Queued: the drain "
+            "reported its raw empty text instead of the placeholder the bubble shows"
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_refused_edit_is_reported_to_the_registry(self) -> None:
+        """Webex refuses the eleventh edit of a message with 400.
+
+        The client reports that as False rather than raising, and the registry
+        retires a receipt -- destroying the bubble's only handle -- on that answer.
+        Discarding it presents a refused edit as a written record.
+        """
+        sessions = FakeSessions(FakeProvider([]))
+        client = FakeClient()
+        d = _dispatcher(sessions, FakeCtx(), client)
+        surface = d._receipt_surface(self._in_thread("THREAD1", "hi"))
+
+        client.edit_ok = False
+        refused = await surface.edit_receipt("MSG1", "body")
+        client.edit_ok = True
+        accepted = await surface.edit_receipt("MSG1", "body")
+
+        assert refused is False, "a refused edit was reported as written"
+        assert accepted is True, "an accepted edit was not reported as written"
+
+    @pytest.mark.asyncio
+    async def test_a_thread_toggle_between_enqueue_and_drain_still_finds_the_receipt(
+        self, monkeypatch, caplog
+    ) -> None:
+        """A live setting changing under a posted bubble must not move its key.
+
+        ``webex.reply_in_thread`` is read per turn, so an operator can flip it while
+        a receipt is already live. Keyed on the parent that setting FILTERS, the key
+        changes with it: the drain's lookup misses and the bubble whose messages are
+        gone stays on "Queued" for good, with nothing in the code to correct it.
+        Keyed on the inbound's own thread root -- which is also the identity the
+        drain collapses entries by -- it survives the toggle. Where the reply GOES
+        is still the live setting's call; which thread the bubble IS was settled
+        when it was posted.
+        """
+
+        async def _noop(*a, **kw):
+            return None
+
+        monkeypatch.setattr("kiro_crew.webex.transport_dispatch.drive_turn", _noop)
+        sessions = FakeSessions(FakeProvider([]))
+        sessions._busy = True
+        client = FakeClient()
+        d = _dispatcher(sessions, FakeCtx(), client, cfg=_cfg_queue())
+        key = "webex:kirocrew:group:space:SPACE1"
+
+        await d._enqueue_with_receipt(key, "in thread", self._in_thread("THREAD2", "in thread"))
+        assert client.sent_threads[-1][1] == "THREAD2", "the receipt did not post in the thread"
+        receipt_id = "MSG1"
+
+        # The operator turns threaded replies off while that bubble is live.
+        d.cfg.webex.reply_in_thread = False
+        _prime_live(d.cfg)
+
+        sessions._busy = False
+        with caplog.at_level(logging.WARNING, logger="kiro_crew.messaging.queue_receipt"):
+            await d._drain_queue(self._in_thread("THREAD2", "in thread"), key)
+
+        flipped = [mid for mid, _room, body in client.edits if "Now answering" in body]
+        assert receipt_id in flipped, (
+            "the toggle moved the receipt key, so the drain never found the bubble "
+            "it had already posted and the consumed message stays 'Queued'"
+        )
+        assert not [
+            r for r in caplog.records if r.levelno == logging.WARNING
+        ], "the flip failed to resolve the conversation that owns the receipt"
+
+    @pytest.mark.asyncio
+    async def test_neither_threads_receipt_carries_the_others_message(self) -> None:
+        sessions = FakeSessions(FakeProvider([]))
+        sessions._busy = True
+        client = FakeClient()
+        d = _dispatcher(sessions, FakeCtx(), client)
+        d.cfg = _cfg_queue()
+        key = "webex:kirocrew:group:space:SPACE1"
+
+        await d._enqueue_with_receipt(key, "topic one", self._in_thread("THREAD1", "topic one"))
+        await d._enqueue_with_receipt(key, "topic two", self._in_thread("THREAD2", "topic two"))
+
+        addressed = [(t, body) for _room, t, body in client.sent_threads]
+        addressed += [(mid, body) for mid, _room, body in client.edits]
+        for where, body in addressed:
+            other = "topic two" if where in {"THREAD1", "MSG1"} else "topic one"
+            assert other not in body, f"{where} was shown another thread's message"
 
 
 class TestApprovalCardPress:

@@ -1287,12 +1287,21 @@ class DiscordDispatcher:
 
         class _Surface:
             label = "discord"
+            # The channel the bubble is posted in, which under
+            # ``dm_scope = "unified"`` is the only thing still telling two
+            # allow-listed people apart: their DM channels differ, the session key
+            # they share does not. A thread is already in the session key, so it
+            # does not belong here.
+            receipt_key = channel_id
 
             async def send_receipt(self, body: str) -> Any | None:
                 return await client.send_message(channel_id, body)
 
-            async def edit_receipt(self, msg_id: Any, body: str) -> None:
-                await client.edit_message(channel_id, msg_id, body)
+            async def edit_receipt(self, msg_id: Any, body: str) -> bool:
+                # The client answers a non-2xx with False rather than raising, and
+                # the registry retires a receipt on this answer, so discarding it
+                # presents a rate-limited edit as a written record.
+                return await client.edit_message(channel_id, msg_id, body)
 
         return _Surface()
 

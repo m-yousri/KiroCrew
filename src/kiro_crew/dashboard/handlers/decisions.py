@@ -300,6 +300,7 @@ def _payload(state: dict, *, denied: bool) -> dict:
         # this scope existed reads false here, which is what the card must draw for
         # it rather than inferring the scope from ``enabled``.
         "memory_text": consent.consented_memory_text(state),
+        "nudge_evidence": consent.consented_nudge_evidence(state),
         # The points this build ships, with the effective status of each. Here
         # rather than on a route of its own because the card reads this payload
         # already and a point's status is a function of the same keystone: a second
@@ -470,7 +471,13 @@ async def api_decisions_consent_put(request: web.Request) -> web.Response:
     # ``history_budget_chars`` is a write this route has to accept. Leaving it out made
     # every ceiling save a 400, which is the whole control dead on the one path an owner
     # uses for it.
-    _STANDALONE_FIELDS = ("tool_args", "compaction", "memory_text", "history_budget_chars")
+    _STANDALONE_FIELDS = (
+        "tool_args",
+        "compaction",
+        "memory_text",
+        "nudge_evidence",
+        "history_budget_chars",
+    )
     scope_named = isinstance(body, dict) and any(f in body for f in _STANDALONE_FIELDS)
     enabled = body.get("enabled", consent.KEEP_ENABLED) if isinstance(body, dict) else None
     if enabled is consent.KEEP_ENABLED and not scope_named:
@@ -565,6 +572,22 @@ async def api_decisions_consent_put(request: web.Request) -> web.Response:
             status=400,
         )
 
+    # The judge's evidence scope, on the same terms again: the sentinel is handed on so
+    # the writer resolves it from the same read its write is based on, and a truthy
+    # stand-in is a 400 rather than a silent yes. This scope is also the wake judge's ON
+    # SWITCH -- the point has no feature toggle of its own -- so the same write both
+    # authorizes the egress category and enables the behaviour, which is why it is
+    # validated as strictly as the three above rather than treated as a preference.
+    nudge_evidence = (
+        body.get("nudge_evidence", consent.KEEP_NUDGE_EVIDENCE) if isinstance(body, dict) else False
+    )
+    if nudge_evidence is not consent.KEEP_NUDGE_EVIDENCE and not isinstance(nudge_evidence, bool):
+        await _audit(request, operation=OP_CONSENT_PUT, outcome="denied", error="invalid_body")
+        return web.json_response(
+            {"error": '"nudge_evidence" must be true or false', "code": _CODE_INVALID_BODY},
+            status=400,
+        )
+
     # Bound to the endpoint the owner REVIEWED, checked against the one the
     # config names now. Equal: consent is for the address on screen, and the one
     # the gate will hold the config to afterwards. Different: the config moved
@@ -606,6 +629,7 @@ async def api_decisions_consent_put(request: web.Request) -> web.Response:
         or tool_args is True
         or compaction is True
         or memory_text is True
+        or nudge_evidence is True
         or budget_grants
     )
     # The same answer, carried to the audit verb below with the ABSENT case kept apart
@@ -660,6 +684,7 @@ async def api_decisions_consent_put(request: web.Request) -> web.Response:
             tool_args=tool_args,
             compaction=compaction,
             memory_text=memory_text,
+            nudge_evidence=nudge_evidence,
         )
     except consent.ConsentCorruptError as exc:
         await _audit(request, operation=OP_CONSENT_PUT, outcome="error", error="corrupt")
@@ -710,13 +735,16 @@ async def api_decisions_consent_put(request: web.Request) -> web.Response:
         # its own: one word for every scope write collapses a GRANT and a REVOCATION
         # into the same row, and which way a scope moved is the fact an auditor
         # reconstructing when egress started actually needs.
-        outcome=_consent_write_verb(enabled, tool_args, compaction, memory_text, budget_asserts),
+        outcome=_consent_write_verb(
+            enabled, tool_args, compaction, memory_text, nudge_evidence, budget_asserts
+        ),
         resources=(
             f"decisions_consent.json endpoint={endpoint} "
             f"history_budget_chars={consent.consented_history_budget(state)} "
             f"tool_args={consent.consented_tool_args(state)} "
             f"compaction={consent.consented_compaction(state)} "
-            f"memory_text={consent.consented_memory_text(state)}"
+            f"memory_text={consent.consented_memory_text(state)} "
+            f"nudge_evidence={consent.consented_nudge_evidence(state)}"
         ),
     )
     return web.json_response(await asyncio.to_thread(_payload, state, denied=withdrawn))

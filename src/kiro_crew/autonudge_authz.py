@@ -809,6 +809,11 @@ async def authorize_and_add_nudge(
     # a message that merely mentions one PR throttles those and can deactivate them
     # outright. The monitor_start surfaces pass ``gate=True`` themselves.
     gate: bool = False,
+    #: The wake judge's brief, passed through to the loop record unchanged. This
+    #: chokepoint owns the banner cap and both redaction passes, but not this: the
+    #: brief is bounded by ``validate_judge_spec`` at the tool surface the owner
+    #: typed it at, which is where a refusal can name a field they can fix.
+    judge: dict | None = None,
     monitor: MonitorState | None = None,
     replace_existing: bool = True,
     # Opt-in for the session-directive re-arm path ONLY: with
@@ -1259,6 +1264,10 @@ async def authorize_and_add_nudge(
             }
             if not replace_existing:
                 add_kwargs["replace_existing"] = False
+            if judge:
+                # Only when there IS one, so a caller that armed no judge produces the
+                # same call it produced before this field existed.
+                add_kwargs["judge"] = dict(judge)
             if replace_stopped:
                 add_kwargs["replace_stopped"] = True
             if self_armed:

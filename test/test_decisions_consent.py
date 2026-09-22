@@ -238,6 +238,7 @@ class TestWrite:
             "tool_args": False,
             "compaction": False,
             "memory_text": False,
+            "nudge_evidence": False,
         }
         assert consent.permits(CUSTOM) is True
         assert consent.permits(DEFAULT_ENDPOINT) is False
@@ -256,6 +257,7 @@ class TestWrite:
             "tool_args": False,
             "compaction": False,
             "memory_text": False,
+            "nudge_evidence": False,
         }
         assert consent.permits(CUSTOM) is False
 
@@ -270,6 +272,7 @@ class TestWrite:
             "tool_args": False,
             "compaction": False,
             "memory_text": False,
+            "nudge_evidence": False,
         }
 
     def test_records_the_history_ceiling_it_was_given(self, keystone):
@@ -497,6 +500,7 @@ class TestHandler:
             "tool_args": False,
             "compaction": False,
             "memory_text": False,
+            "nudge_evidence": False,
             # One row per point this build ships, projected from the seam's own
             # registry so the card lists what the gate will answer for. Nothing is
             # sent on this keystone, so every status is the effective ``off``.
@@ -738,6 +742,7 @@ class TestHandler:
             tool_args=False,
             compaction=False,
             memory_text=False,
+            nudge_evidence=False,
         ):
             seen.append(history_budget_chars)
             return real(
@@ -747,6 +752,7 @@ class TestHandler:
                 tool_args=tool_args,
                 compaction=compaction,
                 memory_text=memory_text,
+                nudge_evidence=nudge_evidence,
             )
 
         monkeypatch.setattr(consent, "save_enabled", _spy)
@@ -1280,6 +1286,7 @@ class TestPointProjection:
             consent.STATE_KEY_TOOL_ARGS,
             consent.STATE_KEY_COMPACTION,
             consent.STATE_KEY_MEMORY_TEXT,
+            consent.STATE_KEY_NUDGE_EVIDENCE,
         }
 
     @pytest.mark.asyncio

@@ -80,6 +80,7 @@ from kiro_crew.validation import (
     WAIT_SCHEMA,
     ValidationError,
     validate_ask_user_question,
+    validate_judge_spec,
     validate_tool_args,
 )
 
@@ -1386,6 +1387,13 @@ def monitor_start(name: str, args: dict[str, Any]) -> str:
     # contract test asserts this dict by EXACT equality. The applier reads it
     # with ``.get``, so absent and empty mean the same thing there.
     banner = str(args.get("banner") or "").strip()
+    # The judge brief, bounded HERE rather than at the applier: this is the surface
+    # the owner typed it at, so a refusal names the field they can fix. The schema
+    # only says the value is an object; these are the bounds on what it may hold.
+    try:
+        judge_spec = validate_judge_spec(args.get("judge"))
+    except ValidationError as exc:
+        return f"monitor_start: {exc.field}: {exc.message}"
     # Before the payload is built, so the emitted dict is byte-identical to what
     # it was (its shape is asserted by exact equality in the contract test) and a
     # certain refusal is reported instead of acknowledged.
@@ -1401,6 +1409,11 @@ def monitor_start(name: str, args: dict[str, Any]) -> str:
     }
     if banner:
         payload["banner"] = banner
+    # CONDITIONAL for the reason ``banner`` is: a caller that arms no judge must see
+    # the payload shape it saw before, which the contract test asserts by exact
+    # equality. The applier reads it with ``.get``, so absent and empty agree there.
+    if judge_spec:
+        payload["judge"] = judge_spec
     # Say whether this loop will be GATED, in the ack, at the surface that armed
     # it. This calls the SCHEDULER'S OWN decision function rather than
     # re-deriving the answer from the target: a subject can infer cleanly and

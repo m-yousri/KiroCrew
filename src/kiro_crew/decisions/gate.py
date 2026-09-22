@@ -67,6 +67,7 @@ DECISION_POINT_NAMES = (
     "model.route",
     "compaction.keep",
     "memory.recall",
+    "nudge.wake",
 )
 
 #: Points whose request carries TOOL-CALL ARGUMENTS, and which therefore need the
@@ -97,6 +98,17 @@ POINTS_NEEDING_COMPACTION = frozenset({"compaction.keep"})
 #: reviewing when they consented. An install that granted either other scope is
 #: inert here.
 POINTS_NEEDING_MEMORY_TEXT = frozenset({"memory.recall"})
+
+#: Points whose request carries EVIDENCE GATHERED FROM OTHER SESSIONS AND THIRD
+#: PARTIES -- a watched worker's transcript tail, a bot's review comment body, a
+#: work-ledger event -- and which therefore need the keystone's ``nudge_evidence``
+#: scope (``consent.consented_nudge_evidence``). A FOURTH set rather than a wider
+#: reading of ``compaction``, because the two were reviewed as different things:
+#: that scope is the OWNING session's own transcript, text the owner was present
+#: for, while this is text from conversations the owner was not in and from a
+#: forge they do not control. An install that granted any other scope is inert
+#: here, which is the property every scope on this keystone exists to give.
+POINTS_NEEDING_NUDGE_EVIDENCE = frozenset({"nudge.wake"})
 
 #: The model id sent when the config leaves ``provider.model`` empty -- the same
 #: fallback ``impl_jev`` applies, so the id the scrub clears is the id sent.
@@ -313,6 +325,7 @@ POINT_SCOPE_KEYS: dict[str, str] = {
     **{p: _consent.STATE_KEY_TOOL_ARGS for p in POINTS_NEEDING_TOOL_ARGS},
     **{p: _consent.STATE_KEY_COMPACTION for p in POINTS_NEEDING_COMPACTION},
     **{p: _consent.STATE_KEY_MEMORY_TEXT for p in POINTS_NEEDING_MEMORY_TEXT},
+    **{p: _consent.STATE_KEY_NUDGE_EVIDENCE for p in POINTS_NEEDING_NUDGE_EVIDENCE},
 }
 
 
@@ -330,6 +343,10 @@ _POINT_SCOPES: dict[str, tuple[str, str]] = {
     **{
         p: ("consented_memory_text", "the text of recalled memories")
         for p in POINTS_NEEDING_MEMORY_TEXT
+    },
+    **{
+        p: ("consented_nudge_evidence", "evidence from other sessions and third parties")
+        for p in POINTS_NEEDING_NUDGE_EVIDENCE
     },
 }
 

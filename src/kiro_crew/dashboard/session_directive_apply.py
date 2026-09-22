@@ -398,6 +398,10 @@ async def _monitor_start(
         # rather than erroring. The authorizer owns the cap and both redaction
         # passes, so nothing is validated twice by routing through it.
         banner=str(args.get("banner") or ""),
+        # Named explicitly for the reason the comment above gives: this call has no
+        # splat, so a brief the tool accepted and this line omitted would be dropped
+        # without a word -- the loop would arm with no judge and nothing would say so.
+        judge=args.get("judge") if isinstance(args.get("judge"), dict) else None,
         source="mcp-directive",
         caller="session-directive",
         gate=gate,
